@@ -183,6 +183,53 @@ public sealed class AudioStreamTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Should_AppendHistory_AcrossRepeatedStartEndCycles()
+    {
+        var (client, token, session) = await LiveSessionAsync("audio-restart-history");
+        await client.PutAsJsonAsync($"/api/sessions/{session.Id}/auto-answer", new { Enabled = false }, Ct);
+        for (var cycle = 0; cycle < 3; cycle++)
+        {
+            using var socket = await ConnectAsync(session.Id, token);
+            for (var i = 0; i < 5; i++)
+            {
+                await socket.SendAsync(LoudFrame(1), WebSocketMessageType.Binary, true, Ct);
+            }
+
+            (await client.PostAsync($"/api/sessions/{session.Id}/end", null, Ct)).EnsureSuccessStatusCode();
+            var transcript = await WaitForEntriesAsync(client, session.Id, cycle + 1);
+            transcript.Entries.Should().HaveCount(cycle + 1, "End drains transcription before restart");
+            if (cycle > 0)
+            {
+                transcript.Entries[^1].AtMs.Should().BeGreaterThan(transcript.Entries[^2].AtMs);
+            }
+
+            var ended = await client.GetFromJsonAsync<SessionDto>($"/api/sessions/{session.Id}", Json, Ct);
+            ended!.AutoAnswer.Should().BeFalse();
+            ended.Status.Should().Be(InterviewCopilot.Domain.Enums.SessionStatus.Ended);
+            if (cycle < 2)
+            {
+                (await client.PostAsync($"/api/sessions/{session.Id}/start", null, Ct)).EnsureSuccessStatusCode();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Should_RejectSecondStream_And_ConcurrentStart()
+    {
+        var (client, token, session) = await LiveSessionAsync("audio-exclusive");
+        using var socket = await ConnectAsync(session.Id, token);
+        await ((Func<Task>)(() => ConnectAsync(session.Id, token))).Should().ThrowAsync<Exception>();
+        var starts = await Task.WhenAll(
+            client.PostAsync($"/api/sessions/{session.Id}/start", null, Ct),
+            client.PostAsync($"/api/sessions/{session.Id}/start", null, Ct));
+        starts.Should().OnlyContain(response => response.StatusCode == HttpStatusCode.Conflict);
+        (await client.PostAsync($"/api/sessions/{session.Id}/end", null, Ct)).EnsureSuccessStatusCode();
+        (await client.PostAsync($"/api/sessions/{session.Id}/start", null, Ct)).EnsureSuccessStatusCode();
+        using var fresh = await ConnectAsync(session.Id, token);
+        await fresh.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", Ct);
+    }
+
+    [Fact]
     public async Task Should_CloseWith1003_When_FrameMalformed()
     {
         var (_, token, session) = await LiveSessionAsync("audio-bad");

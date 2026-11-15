@@ -136,4 +136,43 @@ public class SessionTests
         session.Start(Now);
         ((Action)(() => session.Start(Now))).Should().Throw<DomainException>();
     }
+
+    [Fact]
+    public void Should_RestartSameSession_WithoutCountingStoppedTime()
+    {
+        var session = NewSession();
+        var id = session.Id;
+        session.SetAutoAnswer(false);
+        session.ConfigureAnswers(AnswerLength.Short, AnswerFramework.Star, QuestionType.Coding, "Keep context");
+        var document = session.AttachDocument("context.txt", "Reusable context", Now);
+        session.Start(Now);
+        session.End(Now.AddMinutes(2));
+
+        session.Start(Now.AddHours(1));
+
+        session.Id.Should().Be(id);
+        session.CreatedAt.Should().Be(Now);
+        session.StartedAt.Should().Be(Now.AddHours(1));
+        session.EndedAt.Should().BeNull();
+        session.AutoAnswer.Should().BeFalse();
+        session.SessionPrompt.Should().Be("Keep context");
+        session.Documents.Should().ContainSingle().Which.Should().BeSameAs(document);
+        session.AccumulatedDurationMs.Should().Be(120_000);
+
+        session.End(Now.AddHours(1).AddMinutes(3));
+        session.AccumulatedDurationMs.Should().Be(300_000);
+        ((Action)(() => session.End(Now.AddHours(2)))).Should().Throw<DomainException>();
+    }
+
+    [Fact]
+    public void Should_RejectReversedClock_WithoutEndingLiveSession()
+    {
+        var session = NewSession();
+        session.Start(Now);
+
+        ((Action)(() => session.End(Now.AddSeconds(-1)))).Should().Throw<DomainException>();
+
+        session.Status.Should().Be(SessionStatus.Live);
+        session.EndedAt.Should().BeNull();
+    }
 }

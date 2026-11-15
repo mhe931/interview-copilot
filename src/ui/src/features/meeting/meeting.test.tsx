@@ -132,8 +132,22 @@ describe('handleMeetingDetected', () => {
 
     await run({ app: 'Zoom', autoStart: true });
 
-    expect(navigate).toHaveBeenCalledWith('/start-from-meeting?app=Zoom');
+    expect(navigate).toHaveBeenCalledWith('/start-from-meeting?app=Zoom', { state: { error: expect.any(String) } });
     expect(startCapture).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a key hand-off failure in the picker instead of hiding it', async () => {
+    const { api } = fakeApi((url, init) => {
+      if (url.endsWith('/api/sessions') && init.method === 'POST') return json(session({ id: 'copy' }), 201);
+      if (url.endsWith('/api/sessions/copy/start')) return json(session({ id: 'copy', status: 'Live' }));
+      if (url.endsWith('/api/preferences')) return json({ defaultLlmProvider: 'openai', defaultSpeechToTextProvider: 'whisper' });
+      return json([session({})]);
+    });
+    const platform = createWebPlatform();
+    vi.spyOn(platform, 'getApiKey').mockRejectedValue(new Error('Keychain locked.'));
+    const navigate = vi.fn();
+    await handleMeetingDetected({ app: 'Zoom', autoStart: true }, { api, platform, navigate, now: () => NOW });
+    expect(navigate).toHaveBeenCalledWith('/start-from-meeting?app=Zoom', { state: { error: 'Keychain locked.' } });
   });
 
   it('still opens the picker when the capture status cannot be read', async () => {

@@ -59,6 +59,8 @@ export interface Session {
   createdAt: string;
   startedAt: string | null;
   endedAt: string | null;
+  /** Completed active recording time, excluding stopped intervals. */
+  accumulatedDurationMs?: number;
   documents: DocumentSummary[];
   /** #22: answer detected questions automatically (on by default, pausable). */
   autoAnswer: boolean;

@@ -166,6 +166,21 @@ public sealed class AutoAnswerServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Should_CancelAndSettleAnswer_When_SessionEnds()
+    {
+        _llm = new ScriptedLlm { BlockFirstCall = true };
+        await _service.OnSegmentAsync(Segment(Speaker.Interviewer, "Why do you want this job?"), Ct);
+        await _llm.FirstTokenSent.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        await _service.CancelAsync(_session.Id);
+
+        _llm.FirstCallCancelled.Task.IsCompleted.Should().BeTrue();
+        _store.Answers.Should().BeEmpty();
+        Types.Should().NotContain(SessionEventTypes.AnswerDone);
+        Types.Should().NotContain(SessionEventTypes.Error, "intentional stop is not a timeout");
+    }
+
+    [Fact]
     public async Task Should_StopAnswer_When_TimeoutElapses()
     {
         _llm = new ScriptedLlm { BlockFirstCall = true };

@@ -10,7 +10,7 @@ export const pickerPath = (app: string) => `/start-from-meeting?app=${encodeURIC
 export interface MeetingDeps {
   api: ApiClient;
   platform: Platform;
-  navigate: (path: string) => void;
+  navigate: (path: string, options?: { state: { error: string } }) => void;
   now?: () => Date;
 }
 
@@ -50,7 +50,7 @@ export async function handleMeetingDetected(event: MeetingDetectedEvent, { api, 
     await startLiveSession(api, platform, created.id);
     await platform.showOverlay(created.id);
     navigate(`/sessions/${created.id}`);
-  } catch {
-    navigate(pickerPath(event.app));
+  } catch (err) {
+    navigate(pickerPath(event.app), { state: { error: err instanceof Error ? err.message : 'Could not start the session.' } });
   }
 }

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using InterviewCopilot.Application.Sessions;
 using InterviewCopilot.Domain.Enums;
 using Microsoft.Extensions.Options;
 
@@ -13,6 +14,7 @@ public sealed class TranscriptionSink : IAudioFrameSink
 {
     private readonly VadOptions _options;
     private readonly ISpeechToTextRouter _router;
+    private readonly SessionRuntime? _runtime;
     private readonly ConcurrentDictionary<Guid, SessionPipeline> _pipelines = new();
     private readonly Channel<SessionPipeline> _newPipelines = Channel.CreateUnbounded<SessionPipeline>(
         new UnboundedChannelOptions { SingleReader = true });
@@ -20,12 +22,13 @@ public sealed class TranscriptionSink : IAudioFrameSink
     /// <summary>Creates the sink.</summary>
     /// <param name="options">Voice-activity settings (queue size and thresholds).</param>
     /// <param name="router">Says which sessions go to Deepgram streaming instead; this sink skips those.</param>
-    public TranscriptionSink(IOptions<VadOptions> options, ISpeechToTextRouter router)
+    public TranscriptionSink(IOptions<VadOptions> options, ISpeechToTextRouter router, SessionRuntime? runtime = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(router);
         _options = options.Value;
         _router = router;
+        _runtime = runtime;
     }
 
     internal ChannelReader<SessionPipeline> NewPipelines => _newPipelines.Reader;
@@ -65,12 +68,23 @@ public sealed class TranscriptionSink : IAudioFrameSink
 
     internal int PipelineCount => _pipelines.Count;
 
+    public async ValueTask WaitForIdleAsync(Guid sessionId, CancellationToken cancellationToken)
+    {
+        if (_pipelines.TryGetValue(sessionId, out var pipeline))
+        {
+            await pipeline.Completed.WaitAsync(cancellationToken);
+        }
+    }
+
     internal long DroppedFrames(Guid sessionId) =>
         _pipelines.TryGetValue(sessionId, out var pipeline) ? pipeline.DroppedFrames : 0;
 
     /// <summary>Removes a drained pipeline. Only that exact instance goes, never a newer one for the same session.</summary>
-    internal void Release(SessionPipeline pipeline) =>
+    internal void Release(SessionPipeline pipeline)
+    {
         ((ICollection<KeyValuePair<Guid, SessionPipeline>>)_pipelines).Remove(new KeyValuePair<Guid, SessionPipeline>(pipeline.SessionId, pipeline));
+        pipeline.MarkCompleted();
+    }
 
     /// <summary>The live pipeline for the session; one that already ended is replaced so a reconnect never loses frames.</summary>
     private SessionPipeline PipelineFor(Guid sessionId)
@@ -82,7 +96,7 @@ public sealed class TranscriptionSink : IAudioFrameSink
                 return existing;
             }
 
-            var created = new SessionPipeline(sessionId, _options);
+            var created = new SessionPipeline(sessionId, _options, _runtime?.OriginMs(sessionId) ?? 0);
             var added = existing is null
                 ? _pipelines.TryAdd(sessionId, created)
                 : _pipelines.TryUpdate(sessionId, created, existing);
@@ -103,17 +117,22 @@ internal sealed class SessionPipeline
     private long _dropped;
     private long _reported;
     private bool _ended;
+    private readonly TaskCompletionSource _completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public SessionPipeline(Guid sessionId, VadOptions options)
+    public SessionPipeline(Guid sessionId, VadOptions options, long originMs)
     {
         SessionId = sessionId;
         _options = options;
+        OriginMs = originMs;
         Frames = Channel.CreateBounded(
             new BoundedChannelOptions(options.QueueFrames) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true },
             (AudioFrame _) => Interlocked.Increment(ref _dropped));
     }
 
     public Guid SessionId { get; }
+    public long OriginMs { get; }
+    public Task Completed => _completed.Task;
+    public void MarkCompleted() => _completed.TrySetResult();
 
     public Channel<AudioFrame> Frames { get; }
 

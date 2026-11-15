@@ -13,6 +13,22 @@ Captured during the scaffold interview (2026-10-15).
 | FR-05 | The user can **pin a question type** before starting: behavioral, "how do you…", situational, technical knowledge, system design, coding, tell me about yourself, experience. | Sessions |
 | FR-06 | The user writes a **session prompt** (who they're talking to, tone, how to answer). It applies to every answer and is used as context for question-type detection. | Sessions |
 
+### Session reuse (issue #2)
+
+- **Duplicate** is available in the session list and detail view. It creates a new
+  Draft with an editable title, copies mode, prompt, answer settings, Auto-answer
+  and documents, and leaves the original unchanged. It copies no history,
+  summaries, lifecycle timestamps or capture state, and does not start recording.
+- **Start again** uses the normal Start workflow for an Ended session, preserving
+  the same ID, configuration and history. New transcripts and answers append.
+- Recording duration accumulates active runs only; stopped intervals are excluded.
+  Transcript offsets do not restart at zero when history already exists.
+- Ownership checks, accessible loading/error states and rapid-action protection
+  apply. End must settle capture/transcription/automatic-answer work before another
+  run; subscriptions and runtime panels must not carry stale state across runs.
+- Session data and settings persist after restart. Real microphone and remote Zoom
+  audio are separate verification checks; typed/mocked questions prove neither.
+
 ## Live assistance
 
 | ID | Requirement | Module |

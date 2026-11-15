@@ -32,6 +32,7 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
     private readonly TimeSpan _answerTimeout;
     private readonly Lock _gate = new();
     private readonly Dictionary<Guid, InFlight> _inFlight = [];
+    private readonly Dictionary<Guid, HashSet<InFlight>> _running = [];
 
     /// <summary>Creates the service.</summary>
     /// <param name="scopes">Creates a scope per answer for the scoped repositories and generator.</param>
@@ -89,19 +90,35 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
     {
         while (true)
         {
-            Task? running;
+            Task[] running;
             lock (_gate)
             {
-                running = _inFlight.TryGetValue(sessionId, out var current) ? current.Task : null;
+                running = _running.TryGetValue(sessionId, out var current) ? [.. current.Select(e => e.Task)] : [];
             }
 
-            if (running is null)
+            if (running.Length == 0)
             {
                 return;
             }
 
-            await running;
+            await Task.WhenAll(running);
         }
+    }
+
+    public async Task CancelAsync(Guid sessionId)
+    {
+        lock (_gate)
+        {
+            if (_running.TryGetValue(sessionId, out var running))
+            {
+                foreach (var entry in running)
+                {
+                    entry.Cancel();
+                }
+            }
+        }
+
+        await WhenIdleAsync(sessionId);
     }
 
     /// <inheritdoc />
@@ -109,7 +126,7 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
     {
         lock (_gate)
         {
-            foreach (var entry in _inFlight.Values)
+            foreach (var entry in _running.Values.SelectMany(entries => entries))
             {
                 entry.Cancel();
             }
@@ -140,6 +157,13 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
             var entry = new InFlight(_answerTimeout);
             entry.Task = Task.Run(() => RunAsync(sessionId, question, entry), CancellationToken.None);
             _inFlight[sessionId] = entry;
+            if (!_running.TryGetValue(sessionId, out var running))
+            {
+                running = [];
+                _running[sessionId] = running;
+            }
+
+            running.Add(entry);
         }
     }
 
@@ -180,6 +204,11 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
                 if (_inFlight.TryGetValue(sessionId, out var current) && ReferenceEquals(current, self))
                 {
                     _inFlight.Remove(sessionId);
+                }
+
+                if (_running.TryGetValue(sessionId, out var running) && running.Remove(self) && running.Count == 0)
+                {
+                    _running.Remove(sessionId);
                 }
 
                 self.Dispose();

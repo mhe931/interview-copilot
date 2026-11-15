@@ -151,4 +151,24 @@ describe('LiveAssistant automatic answers', () => {
     expect(JSON.parse(String(ask[1]!.body))).toMatchObject({ question: 'Walk me through your resume.' });
     expect(screen.queryByRole('button', { name: 'Answer it' })).not.toBeInTheDocument();
   });
+
+  it('closes the old event subscription on unmount', async () => {
+    const { api } = fakeApi(() => json({}));
+    const view = renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connected() });
+    const socket = await openSocket();
+    send(socket, 'question.detected', { text: 'Old question' });
+    expect(screen.getByText('Old question')).toBeInTheDocument();
+    view.unmount();
+    expect(socket.closed).toBe(true);
+    expect(socket.onmessage).toBeNull();
+  });
+
+  it('notifies the session details when auto-answer changes', async () => {
+    const changed = vi.fn();
+    const { api } = fakeApi(() => json({ ...sampleSession, autoAnswer: false }));
+    renderWithApp(<LiveAssistant sessionId="s1" onAutoAnswerChanged={changed} />, { api, platform: await connected() });
+    const socket = await openSocket();
+    send(socket, 'autoanswer.state', { enabled: false });
+    expect(changed).toHaveBeenCalledWith(false);
+  });
 });

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using InterviewCopilot.Application.Common.Exceptions;
+using InterviewCopilot.Application.Common.Interfaces;
 using InterviewCopilot.Application.Sessions;
 using InterviewCopilot.Domain.Entities;
 using InterviewCopilot.Domain.Enums;
@@ -53,6 +54,8 @@ public interface IAudioFrameSink
     /// <param name="cancellationToken">Cancels the cleanup.</param>
     /// <returns>A task that completes when the sink has handled the end of the stream.</returns>
     ValueTask OnStreamEndedAsync(Guid sessionId, CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
+    ValueTask WaitForIdleAsync(Guid sessionId, CancellationToken cancellationToken) => ValueTask.CompletedTask;
 }
 
 /// <summary>Notified after each transcript segment is saved and published (#22 auto-answer plugs in here).</summary>
@@ -81,6 +84,8 @@ public sealed class AudioStatsSink(TimeProvider clock) : IAudioFrameSink
 
     public AudioStatsDto Get(Guid sessionId) =>
         _sessions.TryGetValue(sessionId, out var counters) ? counters.Snapshot() : new AudioStatsDto(0, 0, 0, null);
+
+    public void Reset(Guid sessionId) => _sessions.TryRemove(sessionId, out _);
 
     private sealed class Counters
     {
@@ -119,8 +124,28 @@ public sealed class AudioStatsSink(TimeProvider clock) : IAudioFrameSink
 }
 
 /// <summary>Checks who may stream audio and fans frames out to every sink.</summary>
-public sealed class AudioIngestService(SessionService sessions, IEnumerable<IAudioFrameSink> sinks)
+public sealed class AudioIngestService(
+    SessionService sessions,
+    IEnumerable<IAudioFrameSink> sinks,
+    SessionRuntime? runtime = null,
+    ITranscriptRepository? transcripts = null,
+    TimeProvider? clock = null)
 {
+    public async Task<AudioStreamLease> OpenStreamAsync(Guid ownerId, Guid sessionId, CancellationToken cancellationToken)
+    {
+        var state = runtime ?? throw new InvalidOperationException("No session runtime is registered.");
+        using var transition = await state.EnterAsync(sessionId, cancellationToken);
+        await AuthorizeAsync(ownerId, sessionId, cancellationToken);
+        var session = await sessions.GetAsync(ownerId, sessionId, cancellationToken);
+        var history = transcripts is null ? [] : await transcripts.GetSegmentsAsync(sessionId, cancellationToken);
+        var elapsed = session.StartedAt is { } started
+            ? Math.Max(0, (long)((clock ?? TimeProvider.System).GetUtcNow() - started).TotalMilliseconds)
+            : 0;
+        var origin = Math.Max(session.AccumulatedDurationMs + (history.Count == 0 ? 0 : elapsed),
+            history.Count == 0 ? 0 : history.Max(s => s.EndMs));
+        return state.OpenStream(sessionId, origin);
+    }
+
     /// <summary>Throws NotFound (not the caller's) or Conflict (session not live).</summary>
     public async Task AuthorizeAsync(Guid ownerId, Guid sessionId, CancellationToken cancellationToken)
     {
@@ -148,6 +173,11 @@ public sealed class AudioIngestService(SessionService sessions, IEnumerable<IAud
         foreach (var sink in sinks)
         {
             await sink.OnStreamEndedAsync(sessionId, cancellationToken);
+        }
+
+        foreach (var sink in sinks)
+        {
+            await sink.WaitForIdleAsync(sessionId, cancellationToken);
         }
     }
 }

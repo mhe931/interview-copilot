@@ -123,6 +123,36 @@ public class ServiceTests
     }
 
     [Fact]
+    public async Task Should_CopyEndedSessionWithoutHistory_And_RestartOriginalWithoutLosingHistory()
+    {
+        var source = await CreateAsync();
+        await _sessions.SetAutoAnswerAsync(Owner, source.Id, false, Ct);
+        await _sessions.StartAsync(Owner, source.Id, Ct);
+        var segment = TranscriptSegment.Create(source.Id, Speaker.Interviewer, 0, 1_000, "Earlier question?");
+        _store.AddSegment(segment);
+        await _sessions.EndAsync(Owner, source.Id, Ct);
+        var copy = await _sessions.CreateAsync(
+            new CreateSessionCommand(Owner, "Duplicate", SessionMode.Conversation, AnswerLength.Short,
+                AnswerFramework.None, null, null, source.Id), Ct);
+
+        copy.Status.Should().Be(SessionStatus.Draft);
+        copy.StartedAt.Should().BeNull();
+        copy.EndedAt.Should().BeNull();
+        copy.AutoAnswer.Should().BeFalse();
+        (await _store.GetSegmentsAsync(copy.Id, Ct)).Should().BeEmpty();
+        (await _sessions.GetAsync(Owner, source.Id, Ct)).Status.Should().Be(SessionStatus.Ended);
+
+        var restarted = await _sessions.StartAsync(Owner, source.Id, Ct);
+        restarted.Id.Should().Be(source.Id);
+        restarted.AutoAnswer.Should().BeFalse();
+        restarted.Status.Should().Be(SessionStatus.Live);
+        (await _store.GetSegmentsAsync(source.Id, Ct)).Should().ContainSingle().Which.Id.Should().Be(segment.Id);
+        await _sessions.EndAsync(Owner, source.Id, Ct);
+        await ((Func<Task>)(() => _sessions.StartAsync(Guid.NewGuid(), source.Id, Ct)))
+            .Should().ThrowAsync<NotFoundException>();
+    }
+
+    [Fact]
     public async Task Should_HideOtherUsersSessions()
     {
         var created = await CreateAsync();

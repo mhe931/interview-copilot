@@ -106,23 +106,22 @@ describe('startLiveSession', () => {
     expect(noKey.capture).toHaveBeenCalled();
   });
 
-  it('still captures when the key hand-off fails', async () => {
+  it('surfaces a key hand-off failure without starting capture', async () => {
     const failing = setup({ llmProvider: 'openai', speechToTextProvider: 'deepgram' });
     vi.spyOn(failing.platform, 'getApiKey').mockImplementation((provider) =>
       provider === 'openai' ? Promise.reject(new Error('keychain locked')) : Promise.resolve('k'),
     );
     vi.spyOn(failing.api, 'setSessionKey').mockRejectedValue(new Error('boom'));
 
-    await expect(startLiveSession(failing.api, failing.platform, 's1')).resolves.toMatchObject({ status: 'Live' });
-    expect(failing.capture).toHaveBeenCalledWith('s1');
-    expect(failing.api.setSessionKey).toHaveBeenCalledWith('s1', 'deepgram', 'k');
+    await expect(startLiveSession(failing.api, failing.platform, 's1')).rejects.toThrow('keychain locked');
+    expect(failing.capture).not.toHaveBeenCalled();
   });
 
-  it('still captures when preferences cannot be read', async () => {
+  it('surfaces a preferences failure without starting capture', async () => {
     const { api, platform, capture, keysSent } = setup(new Response(null, { status: 500 }));
 
-    await expect(startLiveSession(api, platform, 's1')).resolves.toMatchObject({ status: 'Live' });
-    expect(capture).toHaveBeenCalled();
+    await expect(startLiveSession(api, platform, 's1')).rejects.toThrow();
+    expect(capture).not.toHaveBeenCalled();
     expect(keysSent()).toHaveLength(0);
   });
 });

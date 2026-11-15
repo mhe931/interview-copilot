@@ -83,11 +83,13 @@ public sealed class AnswerGenerator(
         var answer = new StringBuilder();
         await foreach (var token in llm.StreamAsync(llmRequest, cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             answer.Append(token);
             events.Publish(sessionId, SessionEventTypes.AnswerDelta, new { token, version, questionType });
             yield return token;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var suggested = SuggestedAnswer.Create(
             sessionId,
             request.Question,

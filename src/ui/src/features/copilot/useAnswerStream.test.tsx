@@ -52,4 +52,17 @@ describe('useAnswerStream key header', () => {
 
     expect(getApiKey).toHaveBeenCalledWith('ollama');
   });
+
+  it('does not send an answer request if unmounted while reading the key', async () => {
+    const { wrapper, getApiKey, askKeys } = setup({ defaultLlmProvider: 'openai' });
+    let resolveKey!: (key: string | null) => void;
+    getApiKey.mockImplementation(() => new Promise((resolve) => { resolveKey = resolve; }));
+    const { result, unmount } = renderHook(() => useAnswerStream('s1'), { wrapper });
+    const pending = result.current.ask('Why?');
+    await waitFor(() => expect(resolveKey).toBeDefined());
+    unmount();
+    resolveKey('key');
+    await pending;
+    expect(askKeys).toEqual([]);
+  });
 });

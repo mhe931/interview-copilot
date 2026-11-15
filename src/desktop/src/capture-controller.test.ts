@@ -112,6 +112,71 @@ describe('CaptureController', () => {
     expect(controller.stop().state).toBe('stopped');
   });
 
+  it('coalesces overlapping starts and creates only one window', async () => {
+    let resolveLookup!: (response: Response) => void;
+    const lookup = vi.fn(() => new Promise<Response>((resolve) => { resolveLookup = resolve; })) as unknown as typeof fetch;
+    const { controller, windows } = setup('tok', lookup);
+    const first = controller.start(SESSION);
+    const second = controller.start(SESSION);
+    resolveLookup(new Response(JSON.stringify({ mode: 'LiveInterview' })));
+
+    await Promise.all([first, second]);
+    expect(windows).toHaveLength(1);
+    expect(controller.isCaptureWindow(10)).toBe(true);
+  });
+
+  it('cancels a pending start on stop without allowing it to destroy a newer capture', async () => {
+    let resolveLookup!: (response: Response) => void;
+    const lookup = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveLookup = resolve; }))
+      .mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ mode: 'LiveInterview' })))) as unknown as typeof fetch;
+    const { controller, windows } = setup('tok', lookup);
+    const first = controller.start(SESSION);
+    const cancelled = expect(first).rejects.toThrow('Capture start was cancelled');
+    controller.stop();
+    await controller.start(SESSION);
+    resolveLookup(new Response(JSON.stringify({ mode: 'LiveInterview' })));
+    await cancelled;
+    expect(windows).toHaveLength(1);
+    expect(windows[0]!.destroy).not.toHaveBeenCalled();
+    expect(controller.isCaptureWindow(10)).toBe(true);
+  });
+
+  it('lets a newer session start supersede an older pending start', async () => {
+    let resolveLookup!: (response: Response) => void;
+    const lookup = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveLookup = resolve; }))
+      .mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ mode: 'LiveInterview' })))) as unknown as typeof fetch;
+    const { controller, windows } = setup('tok', lookup);
+    const first = controller.start(SESSION);
+    const cancelled = expect(first).rejects.toThrow('Capture start was cancelled');
+    const nextSession = '4f2b8c1e-0d4a-4c8e-9f1a-2b3c4d5e6f70';
+    await controller.start(nextSession);
+    resolveLookup(new Response(JSON.stringify({ mode: 'LiveInterview' })));
+    await cancelled;
+    expect(windows).toHaveLength(1);
+    expect(controller.configFor(10).sessionId).toBe(nextSession);
+  });
+
+  it('cancels startup even after the session lookup while waiting for the microphone setting', async () => {
+    let resolveMic!: (id: string | null) => void;
+    const windows: ReturnType<typeof fakeWindow>[] = [];
+    const controller = new CaptureController({
+      createWindow: () => { const window = fakeWindow(10); windows.push(window); return window; },
+      getToken: () => 'tok',
+      getMicDeviceId: () => new Promise((resolve) => { resolveMic = resolve; }),
+      backendUrl: 'http://127.0.0.1:5480',
+      fetchImpl: sessionLookup('LiveInterview'),
+    });
+    const starting = controller.start(SESSION);
+    const cancelled = expect(starting).rejects.toThrow('Capture start was cancelled');
+    await vi.waitFor(() => expect(resolveMic).toBeDefined());
+    controller.stop();
+    resolveMic(null);
+    await cancelled;
+    expect(windows).toHaveLength(0);
+  });
+
   it('reports an error when the capture window dies on its own', async () => {
     const { controller, windows } = setup();
     await controller.start(SESSION);
