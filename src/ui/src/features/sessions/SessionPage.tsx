@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
@@ -9,6 +9,7 @@ import { PracticeCard } from '@/features/practice/PracticePanel';
 import { useApp } from '@/lib/app-context';
 import { QUESTION_TYPE_LABELS, type Session } from '@/types/api';
 import { DeleteSessionButton } from './DeleteSessionButton';
+import { DuplicateSessionButton } from './DuplicateSessionButton';
 import { SessionSettingsCard } from './SessionSettingsCard';
 import { startLiveSession } from './start-live';
 
@@ -18,16 +19,35 @@ export function SessionPage() {
   const navigate = useNavigate();
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const transitioning = useRef(false);
 
   useEffect(() => {
-    api.getSession(sessionId).then(setSession, (err: Error) => setError(err.message));
+    let active = true;
+    api.getSession(sessionId).then(
+      (value) => {
+        if (active) {
+          setSession(value);
+          setError(null);
+        }
+      },
+      (err: Error) => { if (active) setError(err.message); },
+    );
+    return () => { active = false; };
   }, [api, sessionId]);
 
   async function run(action: () => Promise<Session>) {
+    if (transitioning.current) return;
+    transitioning.current = true;
+    setBusy(true);
+    setError(null);
     try {
       setSession(await action());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong.');
+    } finally {
+      transitioning.current = false;
+      setBusy(false);
     }
   }
 
@@ -45,14 +65,14 @@ export function SessionPage() {
     }
   }
 
-  if (error && !session) {
+  if (error && (!session || session.id !== sessionId)) {
     return (
       <p role="alert" className="p-6 text-destructive">
         {error}
       </p>
     );
   }
-  if (!session) {
+  if (!session || session.id !== sessionId) {
     return <p className="p-6 text-muted-foreground">Loading…</p>;
   }
 
@@ -67,36 +87,46 @@ export function SessionPage() {
           <CardDescription>
             {session.answerLength} answers · {session.framework === 'None' ? 'no framework' : session.framework.toUpperCase()} ·{' '}
             {session.pinnedQuestionType ? `pinned: ${QUESTION_TYPE_LABELS[session.pinnedQuestionType]}` : 'auto-detect'}
+            {' · '}Auto-answer: {session.autoAnswer ? 'on' : 'off'}
           </CardDescription>
         </div>
         <CaptureIndicator active={session.status === 'Live'} />
         <DocumentsPanel sessionId={session.id} documents={session.documents} onChange={(documents) => setSession({ ...session, documents })} />
         <div className="flex flex-wrap gap-2">
-          {session.status === 'Draft' && (
+          {(session.status === 'Draft' || session.status === 'Ended') && (
             <Button
+              disabled={busy}
               onClick={() =>
                 void run(async () => {
-                  const started = await startLiveSession(api, platform, session.id);
-                  await platform.showOverlay(session.id);
-                  return started;
+                  let started: Session | undefined;
+                  try {
+                    await startLiveSession(api, platform, session.id, (value) => { started = value; });
+                    await platform.showOverlay(session.id);
+                    return started!;
+                  } catch (err) {
+                    if (started) setSession(started);
+                    throw err;
+                  }
                 })
               }
             >
-              Start session
+              {busy ? 'Starting…' : session.status === 'Ended' ? 'Start again' : 'Start session'}
             </Button>
           )}
           {session.status === 'Live' && (
             <Button
               variant="destructive"
+              disabled={busy}
               onClick={() =>
                 void run(async () => {
-                  await platform.stopCapture();
-                  await platform.hideOverlay();
+                  const results = await Promise.allSettled([platform.stopCapture(), platform.hideOverlay()]);
+                  const failure = results.find((result) => result.status === 'rejected');
+                  if (failure?.status === 'rejected') throw failure.reason;
                   return api.endSession(session.id);
                 })
               }
             >
-              End session
+              {busy ? 'Ending…' : 'End session'}
             </Button>
           )}
           <Button asChild variant="outline">
@@ -105,6 +135,7 @@ export function SessionPage() {
           <Button variant="outline" onClick={() => void exportPdf()}>
             Export PDF
           </Button>
+          <DuplicateSessionButton session={session} />
           <DeleteSessionButton session={session} onDeleted={() => void navigate('/')} />
         </div>
         {error && (
@@ -116,11 +147,16 @@ export function SessionPage() {
       <div className="grid content-start gap-6">
         <SessionSettingsCard session={session} onSaved={setSession} />
         {session.mode === 'MockInterview' ? (
-          <PracticeCard sessionId={session.id} live={session.status === 'Live'} />
+          !busy && <PracticeCard key={session.status} sessionId={session.id} live={session.status === 'Live'} />
         ) : (
           <Card>
             <CardTitle className="mb-4">Live assistant</CardTitle>
-            <LiveAssistant sessionId={session.id} autoAnswer={session.autoAnswer} />
+            {!busy && <LiveAssistant
+              key={`${session.id}-${session.status}`}
+              sessionId={session.id}
+              autoAnswer={session.autoAnswer}
+              onAutoAnswerChanged={(autoAnswer) => setSession((current) => current && current.id === session.id ? { ...current, autoAnswer } : current)}
+            />}
           </Card>
         )}
       </div>

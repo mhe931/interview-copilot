@@ -15,7 +15,7 @@ export function MeetingListener() {
   }, [navigate]);
 
   useEffect(
-    () => platform.onMeetingDetected((event) => void handleMeetingDetected(event, { api, platform, navigate: (path) => void navigateRef.current(path) })),
+    () => platform.onMeetingDetected((event) => void handleMeetingDetected(event, { api, platform, navigate: (path, options) => void navigateRef.current(path, options) })),
     [api, platform],
   );
 

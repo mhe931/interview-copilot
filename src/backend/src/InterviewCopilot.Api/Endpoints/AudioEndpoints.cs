@@ -24,12 +24,17 @@ internal static class AudioEndpoints
                     return Results.BadRequest("Expected a WebSocket request.");
                 }
 
-                await ingest.AuthorizeAsync(user.UserId(), sessionId, ct); // 404 / 409 before the upgrade
+                using var stream = await ingest.OpenStreamAsync(user.UserId(), sessionId, ct); // 404 / 409 before the upgrade
                 using var socket = await context.WebSockets.AcceptWebSocketAsync();
-                bool malformed;
+                using var receiving = CancellationTokenSource.CreateLinkedTokenSource(ct, stream.Stopping);
+                var malformed = false;
                 try
                 {
-                    malformed = await ReceiveAsync(socket, sessionId, ingest, ct);
+                    malformed = await ReceiveAsync(socket, sessionId, ingest, receiving.Token);
+                }
+                catch (OperationCanceledException) when (stream.Stopping.IsCancellationRequested)
+                {
+                    socket.Abort();
                 }
                 finally
                 {
@@ -37,6 +42,7 @@ internal static class AudioEndpoints
                     await ingest.EndStreamAsync(sessionId, CancellationToken.None);
                 }
 
+                stream.Dispose();
                 if (malformed)
                 {
                     // After the flush: this waits for the client's close reply, which a bad client may never send.

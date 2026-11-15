@@ -25,6 +25,8 @@ internal sealed class SessionConfiguration : IEntityTypeConfiguration<Session>
         builder.Property(s => s.Id).ValueGeneratedNever(); // ids are created in the domain
         builder.Property(s => s.Title).HasMaxLength(SessionLimits.MaxTitleLength).IsRequired();
         builder.Property(s => s.SessionPrompt).HasMaxLength(SessionLimits.MaxSessionPromptLength);
+        builder.Ignore(s => s.AccumulatedDurationMs);
+        builder.Property<long?>("_accumulatedDurationMs").HasColumnName("AccumulatedDurationMs");
         builder.HasIndex(s => s.OwnerId);
         builder.HasOne<UserAccount>().WithMany().HasForeignKey(s => s.OwnerId).OnDelete(DeleteBehavior.Cascade);
         builder.HasMany(s => s.Documents).WithOne().HasForeignKey(d => d.SessionId).OnDelete(DeleteBehavior.Cascade);

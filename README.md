@@ -34,6 +34,7 @@ computer unless you turn on a cloud provider yourself.
 - **Practice mode:** the AI interviews you from the job description, then scores and critiques your
   answers.
 - **History:** sessions and transcripts saved locally; export any transcript to PDF.
+- **Session reuse:** **Duplicate** copies setup and documents into a new, editable-title draft without history or recording. **Start again** reopens an ended session using its saved settings and appends to its history; time between runs is excluded from recording duration. Auto-answer keeps its saved on/off value.
 
 ## How it works
 

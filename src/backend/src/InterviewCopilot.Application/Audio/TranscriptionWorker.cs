@@ -53,6 +53,7 @@ public sealed partial class TranscriptionWorker : BackgroundService
         {
             await foreach (var pipeline in _sink.NewPipelines.ReadAllAsync(stoppingToken))
             {
+                drains.RemoveAll(task => task.IsCompletedSuccessfully);
                 drains.Add(DrainAsync(pipeline, stoppingToken));
             }
         }
@@ -105,14 +106,16 @@ public sealed partial class TranscriptionWorker : BackgroundService
                 var segment = pipeline.BufferFor(frame.Speaker).Push(frame.Pcm16);
                 if (segment is not null)
                 {
-                    await TranscribeAsync(pipeline.SessionId, frame.Speaker, segment, cancellationToken);
+                    await TranscribeAsync(pipeline.SessionId, frame.Speaker,
+                        segment with { StartMs = pipeline.OriginMs + segment.StartMs, EndMs = pipeline.OriginMs + segment.EndMs }, cancellationToken);
                 }
             }
 
             // The stream ended and the queue is empty: transcribe what each speaker was still saying.
             foreach (var (speaker, segment) in pipeline.FlushAll())
             {
-                await TranscribeAsync(pipeline.SessionId, speaker, segment, cancellationToken);
+                await TranscribeAsync(pipeline.SessionId, speaker,
+                    segment with { StartMs = pipeline.OriginMs + segment.StartMs, EndMs = pipeline.OriginMs + segment.EndMs }, cancellationToken);
             }
         }
         catch (OperationCanceledException)

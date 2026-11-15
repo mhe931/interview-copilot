@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using InterviewCopilot.Application.Common.Interfaces;
 using InterviewCopilot.Application.Events;
 using InterviewCopilot.Application.Providers;
+using InterviewCopilot.Application.Sessions;
 using InterviewCopilot.Domain.Entities;
 using InterviewCopilot.Domain.Enums;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,6 +53,7 @@ public sealed partial class DeepgramStreamingSink : IAudioFrameSink, IAsyncDispo
     private readonly ISessionEventPublisher _publisher;
     private readonly ILogger<DeepgramStreamingSink> _logger;
     private readonly DeepgramStreamingTimings _timings;
+    private readonly SessionRuntime? _runtime;
     private readonly ConcurrentDictionary<(Guid SessionId, Speaker Speaker), SpeakerStream> _streams = new();
     private readonly ConcurrentDictionary<Guid, byte> _noKeyReported = new();
     private readonly CancellationTokenSource _shutdown = new();
@@ -72,7 +74,8 @@ public sealed partial class DeepgramStreamingSink : IAudioFrameSink, IAsyncDispo
         IServiceScopeFactory scopes,
         ISessionEventPublisher publisher,
         ILogger<DeepgramStreamingSink> logger,
-        DeepgramStreamingTimings? timings = null)
+        DeepgramStreamingTimings? timings = null,
+        SessionRuntime? runtime = null)
     {
         ArgumentNullException.ThrowIfNull(factory);
         ArgumentNullException.ThrowIfNull(router);
@@ -87,6 +90,7 @@ public sealed partial class DeepgramStreamingSink : IAudioFrameSink, IAsyncDispo
         _publisher = publisher;
         _logger = logger;
         _timings = timings ?? DeepgramStreamingTimings.Default;
+        _runtime = runtime;
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Deepgram connection for session {SessionId} ({Speaker}) failed ({ErrorType}).")]
@@ -132,7 +136,7 @@ public sealed partial class DeepgramStreamingSink : IAudioFrameSink, IAsyncDispo
             return;
         }
 
-        var stream = new SpeakerStream(sessionId, frame.Speaker, apiKey);
+        var stream = new SpeakerStream(sessionId, frame.Speaker, apiKey, _runtime?.OriginMs(sessionId) ?? 0);
         var added = existing is null ? _streams.TryAdd(slot, stream) : _streams.TryUpdate(slot, stream, existing);
         if (added)
         {
@@ -267,7 +271,7 @@ public sealed partial class DeepgramStreamingSink : IAudioFrameSink, IAsyncDispo
     private async Task<bool> PumpAsync(SpeakerStream stream, IDeepgramConnection connection, CancellationToken shutdown)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
-        var originMs = stream.ConsumedBytes / BytesPerMs;
+        var originMs = stream.OriginMs + stream.ConsumedBytes / BytesPerMs;
         var receive = ReceiveLoopAsync(stream, connection, originMs, cts.Token);
         var send = SendLoopAsync(stream, connection, cts.Token);
         try
@@ -461,11 +465,12 @@ public sealed partial class DeepgramStreamingSink : IAudioFrameSink, IAsyncDispo
         private long _consumedBytes;
         private bool _inputEnded;
 
-        public SpeakerStream(Guid sessionId, Speaker speaker, string apiKey)
+        public SpeakerStream(Guid sessionId, Speaker speaker, string apiKey, long originMs)
         {
             SessionId = sessionId;
             Speaker = speaker;
             ApiKey = apiKey;
+            OriginMs = originMs;
         }
 
         public Guid SessionId { get; }
@@ -473,6 +478,7 @@ public sealed partial class DeepgramStreamingSink : IAudioFrameSink, IAsyncDispo
         public Speaker Speaker { get; }
 
         public string ApiKey { get; }
+        public long OriginMs { get; }
 
         public Task Run { get; set; } = Task.CompletedTask;
 

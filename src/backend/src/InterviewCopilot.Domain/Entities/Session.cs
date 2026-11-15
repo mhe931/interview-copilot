@@ -7,6 +7,7 @@ namespace InterviewCopilot.Domain.Entities;
 public sealed class Session
 {
     private readonly List<SessionDocument> _documents = [];
+    private long? _accumulatedDurationMs;
 
     private Session()
     {
@@ -39,6 +40,11 @@ public sealed class Session
     public DateTimeOffset? StartedAt { get; private set; }
 
     public DateTimeOffset? EndedAt { get; private set; }
+
+    public long AccumulatedDurationMs => _accumulatedDurationMs
+        ?? (StartedAt is { } started && EndedAt is { } ended
+            ? Math.Max(0, (long)(ended - started).TotalMilliseconds)
+            : 0);
 
     /// <summary>Answer detected interviewer questions automatically (#22). On by default; the user can pause it.</summary>
     public bool AutoAnswer { get; private set; }
@@ -124,13 +130,15 @@ public sealed class Session
 
     public void Start(DateTimeOffset now)
     {
-        if (Status != SessionStatus.Draft)
+        if (Status == SessionStatus.Live)
         {
-            throw new DomainException("Only a session that hasn't started yet can be started.");
+            throw new DomainException("The session is already live.");
         }
 
+        _accumulatedDurationMs = AccumulatedDurationMs;
         Status = SessionStatus.Live;
         StartedAt = now;
+        EndedAt = null;
     }
 
     public void End(DateTimeOffset now)
@@ -140,6 +148,12 @@ public sealed class Session
             throw new DomainException("Only a live session can be ended.");
         }
 
+        if (StartedAt is not { } started || now < started)
+        {
+            throw new DomainException("The session cannot end before it started.");
+        }
+
+        _accumulatedDurationMs = checked(AccumulatedDurationMs + (long)(now - started).TotalMilliseconds);
         Status = SessionStatus.Ended;
         EndedAt = now;
     }

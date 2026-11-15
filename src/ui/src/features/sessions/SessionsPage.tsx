@@ -5,6 +5,7 @@ import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 import { useApp } from '@/lib/app-context';
 import type { CreateSessionInput, Session } from '@/types/api';
 import { DeleteSessionButton } from './DeleteSessionButton';
+import { DuplicateSessionButton } from './DuplicateSessionButton';
 import { SessionForm } from './SessionForm';
 import { SpeechModelBanner } from './SpeechModelBanner';
 
@@ -67,7 +68,7 @@ export function SessionsPage() {
             <Link to={`/sessions/${session.id}`} className="min-w-0 flex-1 p-3">
               <div className="font-medium">{session.title}</div>
               <div className="text-xs text-muted-foreground">
-                {session.status} · {new Date(session.createdAt).toLocaleString()} · {session.documents.length} docs
+                {session.status} · {new Date(session.createdAt).toLocaleString()} · {session.documents.length} docs · Auto-answer: {session.autoAnswer ? 'on' : 'off'}
               </div>
             </Link>
             {session.status === 'Ended' && (
@@ -75,7 +76,8 @@ export function SessionsPage() {
                 View transcript
               </Link>
             )}
-            <div className="pr-3">
+            <div className="flex gap-2 pr-3">
+              <DuplicateSessionButton session={session} />
               <DeleteSessionButton
                 session={session}
                 onDeleted={(id) => setSessions((current) => current.filter((item) => item.id !== id))}

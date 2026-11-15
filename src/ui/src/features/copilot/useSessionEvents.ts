@@ -97,6 +97,8 @@ export function useSessionEvents(
       clearTimeout(timer);
       if (socket) {
         socket.onclose = null;
+        socket.onopen = null;
+        socket.onmessage = null;
         socket.close();
       }
     };

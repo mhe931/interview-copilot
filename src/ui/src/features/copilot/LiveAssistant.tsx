@@ -15,11 +15,13 @@ export function LiveAssistant({
   sessionId,
   compact = false,
   autoAnswer: initialAutoAnswer = true,
+  onAutoAnswerChanged,
 }: {
   sessionId: string;
   compact?: boolean;
   /** Current auto-answer setting of the session; kept in sync afterwards through `autoanswer.state` events. */
   autoAnswer?: boolean;
+  onAutoAnswerChanged?: (enabled: boolean) => void;
 }) {
   const { api } = useApp();
   const { answer, ask, beginAuto, applyEvent } = useAnswerStream(sessionId);
@@ -32,7 +34,9 @@ export function LiveAssistant({
     (event: SessionEvent) => {
       const data = (event.data ?? {}) as { text?: string; enabled?: boolean };
       if (event.type === 'autoanswer.state') {
-        setAutoAnswer(Boolean(data.enabled));
+        const enabled = Boolean(data.enabled);
+        setAutoAnswer(enabled);
+        onAutoAnswerChanged?.(enabled);
       } else if (event.type === 'question.detected' && data.text) {
         if (autoAnswer) {
           setPausedQuestion(null);
@@ -44,7 +48,7 @@ export function LiveAssistant({
         applyEvent(event);
       }
     },
-    [autoAnswer, beginAuto, applyEvent],
+    [autoAnswer, beginAuto, applyEvent, onAutoAnswerChanged],
   );
   useSessionEvents(sessionId, onEvent);
 
@@ -61,6 +65,7 @@ export function LiveAssistant({
     try {
       const session = await api.setAutoAnswer(sessionId, !autoAnswer);
       setAutoAnswer(session.autoAnswer);
+      onAutoAnswerChanged?.(session.autoAnswer);
     } catch (err) {
       setToggleError(err instanceof Error ? err.message : 'Could not change auto-answer.');
     }

@@ -433,6 +433,13 @@ describe('Sign-in persistence', () => {
 });
 
 describe('App shell', () => {
+  it('does not assume auto-answer is enabled when the overlay cannot load the session', async () => {
+    const { api } = fakeApi(() => json({ detail: 'Session unavailable.' }, 500));
+    renderWithApp(<OverlayPage />, { api, route: '/overlay/s1', path: '/overlay/:sessionId' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Session unavailable.');
+    expect(screen.queryByRole('button', { name: 'Pause auto-answer' })).not.toBeInTheDocument();
+  });
+
   it('shows sign-in until a token exists, then the overlay route', async () => {
     const { api } = fakeApi(() => json([]));
     const platform = createWebPlatform();

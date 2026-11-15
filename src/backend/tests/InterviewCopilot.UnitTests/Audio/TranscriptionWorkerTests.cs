@@ -394,6 +394,19 @@ public sealed class TranscriptionWorkerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Should_WaitForFinalTranscript_When_StoppingForRestart()
+    {
+        await _worker.StartAsync(Ct);
+        await SendAsync(Speaker.Interviewer, loudFrames: 5, silentFrames: 0);
+
+        await _sink.OnStreamEndedAsync(_sessionId, Ct);
+        await _sink.WaitForIdleAsync(_sessionId, Ct);
+
+        _sink.PipelineCount.Should().Be(0);
+        _store.Segments.Should().ContainSingle().Which.EndMs.Should().Be(500);
+    }
+
+    [Fact]
     public async Task Should_ReleaseEveryPipeline_When_ManySessionsStartAndEnd()
     {
         await _worker.StartAsync(Ct);

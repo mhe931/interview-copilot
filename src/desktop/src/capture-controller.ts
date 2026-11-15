@@ -27,6 +27,8 @@ export class CaptureController {
   private window: CaptureWindowLike | null = null;
   private config: CaptureConfig | null = null;
   private current: CaptureStatus = IDLE;
+  private generation = 0;
+  private pending: { sessionId: string; promise: Promise<CaptureStatus> } | null = null;
 
   constructor(private readonly deps: CaptureControllerDeps) {}
 
@@ -34,17 +36,30 @@ export class CaptureController {
     return this.current;
   }
 
-  async start(sessionId: string): Promise<CaptureStatus> {
+  start(sessionId: string): Promise<CaptureStatus> {
     if (typeof sessionId !== 'string' || !/^[0-9a-f-]{36}$/i.test(sessionId)) {
-      throw new Error('Invalid session id.');
+      return Promise.reject(new Error('Invalid session id.'));
     }
+    if (this.pending?.sessionId === sessionId) return this.pending.promise;
     const token = this.deps.getToken();
     if (!token) {
-      throw new Error('Sign in before starting capture.');
+      return Promise.reject(new Error('Sign in before starting capture.'));
     }
     this.stop();
+    const generation = this.generation;
+    const promise = this.startWindow(sessionId, token, generation).finally(() => {
+      if (this.pending?.promise === promise) this.pending = null;
+    });
+    this.pending = { sessionId, promise };
+    return promise;
+  }
+
+  private async startWindow(sessionId: string, token: string, generation: number): Promise<CaptureStatus> {
     const micOnly = await this.isMockInterview(sessionId, token);
-    this.config = { sessionId, token, micDeviceId: await this.deps.getMicDeviceId(), backendUrl: this.deps.backendUrl, micOnly };
+    if (generation !== this.generation) throw new Error('Capture start was cancelled.');
+    const micDeviceId = await this.deps.getMicDeviceId();
+    if (generation !== this.generation) throw new Error('Capture start was cancelled.');
+    this.config = { sessionId, token, micDeviceId, backendUrl: this.deps.backendUrl, micOnly };
     this.current = { state: 'connecting', interviewer: false, mic: false, message: null };
     const window = this.deps.createWindow();
     window.onClosed(() => {
@@ -77,12 +92,15 @@ export class CaptureController {
   }
 
   stop(): CaptureStatus {
+    this.generation++;
+    const hadPending = this.pending !== null;
+    this.pending = null;
     const window = this.window;
     this.window = null;
     this.config = null;
-    if (window) {
+    if (window || hadPending) {
       this.current = { ...IDLE, state: 'stopped' };
-      if (!window.isDestroyed()) {
+      if (window && !window.isDestroyed()) {
         window.destroy();
       }
     }

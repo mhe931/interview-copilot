@@ -1,6 +1,9 @@
+using InterviewCopilot.Application.Audio;
 using InterviewCopilot.Application.Common.Exceptions;
 using InterviewCopilot.Application.Common.Interfaces;
+using InterviewCopilot.Application.Copilot;
 using InterviewCopilot.Application.Events;
+using InterviewCopilot.Application.Practice;
 using InterviewCopilot.Application.Providers;
 using InterviewCopilot.Domain.Entities;
 using InterviewCopilot.Domain.Enums;
@@ -39,7 +42,8 @@ public sealed record SessionDto(
     DateTimeOffset? StartedAt,
     DateTimeOffset? EndedAt,
     IReadOnlyList<DocumentSummaryDto> Documents,
-    bool AutoAnswer)
+    bool AutoAnswer,
+    long AccumulatedDurationMs = 0)
 {
     public static SessionDto From(Session session)
     {
@@ -57,7 +61,8 @@ public sealed record SessionDto(
             session.StartedAt,
             session.EndedAt,
             [.. session.Documents.Select(d => new DocumentSummaryDto(d.Id, d.FileName, d.Content.Length, d.CreatedAt))],
-            session.AutoAnswer);
+            session.AutoAnswer,
+            session.AccumulatedDurationMs);
     }
 }
 
@@ -67,7 +72,11 @@ public sealed class SessionService(
     IUnitOfWork unitOfWork,
     TimeProvider clock,
     ISessionEventPublisher? events = null,
-    ISessionKeyStore? sessionKeys = null)
+    ISessionKeyStore? sessionKeys = null,
+    SessionRuntime? runtime = null,
+    IEnumerable<IAudioFrameSink>? audioSinks = null,
+    AutoAnswerService? autoAnswers = null,
+    PracticeAnswerCollector? practiceAnswers = null)
 {
     public const int MaxApiKeyLength = 512;
 
@@ -117,6 +126,7 @@ public sealed class SessionService(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
+        using var transition = runtime is null ? null : await runtime.EnterAsync(sessionId, cancellationToken);
         var session = await LoadOwnedAsync(ownerId, sessionId, cancellationToken);
         session.ConfigureAnswers(command.AnswerLength, command.Framework, command.PinnedQuestionType, command.SessionPrompt);
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -125,7 +135,19 @@ public sealed class SessionService(
 
     public async Task<SessionDto> StartAsync(Guid ownerId, Guid sessionId, CancellationToken cancellationToken)
     {
+        using var transition = runtime is null ? null : await runtime.EnterAsync(sessionId, cancellationToken);
         var session = await LoadOwnedAsync(ownerId, sessionId, cancellationToken);
+        if (session.Status == SessionStatus.Live)
+        {
+            throw new ConflictException("The session is already live.");
+        }
+
+        await SettleRuntimeAsync(session.Id);
+        foreach (var stats in (audioSinks ?? []).OfType<AudioStatsSink>())
+        {
+            stats.Reset(session.Id);
+        }
+
         session.Start(clock.GetUtcNow());
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return SessionDto.From(session);
@@ -141,6 +163,7 @@ public sealed class SessionService(
     /// <returns>A task that completes once the session is gone.</returns>
     public async Task DeleteAsync(Guid ownerId, Guid sessionId, CancellationToken cancellationToken)
     {
+        using var transition = runtime is null ? null : await runtime.EnterAsync(sessionId, cancellationToken);
         var session = await LoadOwnedAsync(ownerId, sessionId, cancellationToken);
         if (session.Status == SessionStatus.Live)
         {
@@ -153,11 +176,38 @@ public sealed class SessionService(
 
     public async Task<SessionDto> EndAsync(Guid ownerId, Guid sessionId, CancellationToken cancellationToken)
     {
+        using var transition = runtime is null ? null : await runtime.EnterAsync(sessionId, cancellationToken);
         var session = await LoadOwnedAsync(ownerId, sessionId, cancellationToken);
         session.End(clock.GetUtcNow());
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        sessionKeys?.Clear(session.Id);
+        await SettleRuntimeAsync(session.Id);
         return SessionDto.From(session);
+    }
+
+    private async Task SettleRuntimeAsync(Guid sessionId)
+    {
+        if (runtime is not null)
+        {
+            await runtime.StopStreamAsync(sessionId);
+        }
+
+        foreach (var sink in audioSinks ?? [])
+        {
+            await sink.OnStreamEndedAsync(sessionId, CancellationToken.None);
+        }
+
+        foreach (var sink in audioSinks ?? [])
+        {
+            await sink.WaitForIdleAsync(sessionId, CancellationToken.None);
+        }
+
+        if (autoAnswers is not null)
+        {
+            await autoAnswers.CancelAsync(sessionId);
+        }
+
+        practiceAnswers?.Take(sessionId);
+        sessionKeys?.Clear(sessionId);
     }
 
     /// <summary>
@@ -176,6 +226,7 @@ public sealed class SessionService(
             throw new DomainException($"API keys must be 1 to {MaxApiKeyLength} characters.");
         }
 
+        using var transition = runtime is null ? null : await runtime.EnterAsync(sessionId, cancellationToken);
         var session = await LoadOwnedAsync(ownerId, sessionId, cancellationToken);
         if (session.Status != SessionStatus.Live)
         {
@@ -189,6 +240,7 @@ public sealed class SessionService(
     /// <summary>Pauses or resumes automatic answers and tells everyone watching the session (#22).</summary>
     public async Task<SessionDto> SetAutoAnswerAsync(Guid ownerId, Guid sessionId, bool enabled, CancellationToken cancellationToken)
     {
+        using var transition = runtime is null ? null : await runtime.EnterAsync(sessionId, cancellationToken);
         var session = await LoadOwnedAsync(ownerId, sessionId, cancellationToken);
         session.SetAutoAnswer(enabled);
         await unitOfWork.SaveChangesAsync(cancellationToken);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 import { SessionForm } from '@/features/sessions/SessionForm';
@@ -11,10 +11,11 @@ import type { CreateSessionInput, Session } from '@/types/api';
 export function StartFromMeetingPage() {
   const { api, platform } = useApp();
   const navigate = useNavigate();
+  const location = useLocation();
   const [params] = useSearchParams();
   const app = params.get('app');
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>((location.state as { error?: string } | null)?.error ?? null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {

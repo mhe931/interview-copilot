@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SessionEvent } from './useSessionEvents';
 import { useApp } from '@/lib/app-context';
 import type { AnswerModifier, QuestionType } from '@/types/api';
@@ -22,6 +22,11 @@ export function useAnswerStream(sessionId: string, fallbackProvider = 'ollama') 
   /** True from an auto-answered `question.detected` until its `answer.done`; only then are answer events applied. */
   const autoActive = useRef(false);
 
+  useEffect(() => () => {
+    controller.current?.abort();
+    autoActive.current = false;
+  }, [sessionId]);
+
   const effectiveProvider = useCallback(async () => {
     try {
       const prefs = await api.getPreferences();
@@ -40,8 +45,9 @@ export function useAnswerStream(sessionId: string, fallbackProvider = 'ollama') 
       setAnswer({ ...IDLE, question, status: 'streaming', version: previous?.version ?? 0 });
 
       // Manual answers of a session without a live key hand-off carry the key of the account's chat provider (#30).
-      const llmApiKey = (await platform.getApiKey(await effectiveProvider())) ?? undefined;
       try {
+        const llmApiKey = (await platform.getApiKey(await effectiveProvider())) ?? undefined;
+        if (abort.signal.aborted) return;
         await api.ask(
           sessionId,
           {
@@ -52,10 +58,10 @@ export function useAnswerStream(sessionId: string, fallbackProvider = 'ollama') 
             llmApiKey,
           },
           {
-            onHeader: (header) => setAnswer((s) => ({ ...s, questionType: header.questionType, version: header.version })),
-            onToken: (token) => setAnswer((s) => ({ ...s, text: s.text + token })),
-            onError: (message) => setAnswer((s) => ({ ...s, status: 'error', error: message })),
-            onDone: () => setAnswer((s) => ({ ...s, status: 'done' })),
+            onHeader: (header) => { if (!abort.signal.aborted) setAnswer((s) => ({ ...s, questionType: header.questionType, version: header.version })); },
+            onToken: (token) => { if (!abort.signal.aborted) setAnswer((s) => ({ ...s, text: s.text + token })); },
+            onError: (message) => { if (!abort.signal.aborted) setAnswer((s) => ({ ...s, status: 'error', error: message })); },
+            onDone: () => { if (!abort.signal.aborted) setAnswer((s) => ({ ...s, status: 'done' })); },
           },
           abort.signal,
         );
