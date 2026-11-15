@@ -36,6 +36,7 @@ public static class DependencyInjection
         services.AddScoped<PairingService>();
         services.AddScoped<TranscriptService>();
         services.AddScoped<AnswerGenerator>();
+        services.AddSingleton<PreparedAnswerIndex>();
         services.AddScoped<PreferencesService>();
         services.AddSingleton<AutoAnswerService>();
         services.AddSingleton<ITranscriptSegmentListener>(provider => provider.GetRequiredService<AutoAnswerService>());

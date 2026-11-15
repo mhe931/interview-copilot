@@ -27,6 +27,10 @@ public sealed class SuggestedAnswer
 
     public AnswerModifier Modifier { get; private set; }
 
+    public AnswerOrigin Origin { get; private set; }
+
+    public string? SourceDocument { get; private set; }
+
     public DateTimeOffset CreatedAt { get; private set; }
 
     public static SuggestedAnswer Create(
@@ -36,7 +40,9 @@ public sealed class SuggestedAnswer
         string text,
         int version,
         AnswerModifier modifier,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        AnswerOrigin origin = AnswerOrigin.Generated,
+        string? sourceDocument = null)
     {
         if (string.IsNullOrWhiteSpace(question))
         {
@@ -57,6 +63,8 @@ public sealed class SuggestedAnswer
             Text = text,
             Version = version,
             Modifier = modifier,
+            Origin = origin,
+            SourceDocument = sourceDocument,
             CreatedAt = now,
         };
     }

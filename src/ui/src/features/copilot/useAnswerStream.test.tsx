@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { AppProvider } from '@/lib/app-context';
@@ -33,6 +33,26 @@ describe('useAnswerStream key header', () => {
     await waitFor(() => expect(result.current.answer.status).toBe('done'));
     expect(getApiKey).toHaveBeenCalledWith('openai');
     expect(askKeys).toEqual(['key-openai']);
+  });
+
+  describe('automatic answer identity', () => {
+    it('ignores stale and unrelated answer events after a newer question', () => {
+      const { wrapper } = setup({ defaultLlmProvider: 'google' });
+      const { result } = renderHook(() => useAnswerStream('s1'), { wrapper });
+
+      act(() => {
+        result.current.beginAuto('First question?', 'first');
+        result.current.beginAuto('Second question?', 'second');
+        result.current.applyEvent({ id: 1, type: 'answer.delta', data: { segmentId: 'first', token: 'stale' } });
+        result.current.applyEvent({ id: 2, type: 'answer.done', data: { segmentId: 'first' } });
+        result.current.applyEvent({ id: 3, type: 'error', data: { message: 'unrelated' } });
+        result.current.applyEvent({ id: 4, type: 'answer.delta', data: { segmentId: 'second', token: 'fresh' } });
+      });
+
+      expect(result.current.answer.question).toBe('Second question?');
+      expect(result.current.answer.text).toBe('fresh');
+      expect(result.current.answer.status).toBe('streaming');
+    });
   });
 
   it('uses the configured default when no provider is chosen', async () => {

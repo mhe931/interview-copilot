@@ -98,6 +98,8 @@ export interface TranscriptAnswer {
   questionType: QuestionType;
   version: number;
   text: string;
+  origin: AnswerOrigin;
+  sourceDocument: string | null;
 }
 
 /** A scored mock-interview answer (#26). */
@@ -173,9 +175,13 @@ export interface Preferences {
   defaultSpeechToTextProvider: string;
 }
 
+export type AnswerOrigin = 'Generated' | 'Prepared';
+
 export interface AnswerHeader {
   questionType: QuestionType;
   version: number;
+  origin: AnswerOrigin;
+  sourceDocument: string | null;
 }
 
 export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {

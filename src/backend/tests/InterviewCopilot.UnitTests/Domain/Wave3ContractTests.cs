@@ -13,6 +13,8 @@ using InterviewCopilot.Infrastructure.Persistence;
 using InterviewCopilot.UnitTests.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Options;
 
 namespace InterviewCopilot.UnitTests.Domain;
@@ -243,6 +245,34 @@ public class Wave3ContractTests
             stored!.LlmProvider.Should().Be("openai");
             stored.SpeechToTextProvider.Should().Be("deepgram");
         }
+    }
+
+    [Fact]
+    public async Task Should_PreserveExistingAnswers_When_OriginMigrationIsApplied()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync(Ct);
+        var options = new DbContextOptionsBuilder<InterviewCopilotDbContext>().UseSqlite(connection).Options;
+        var account = UserAccount.Create("migration-test", "hash", Now);
+        var session = Session.Create(account.Id, "Migration", SessionMode.LiveInterview, Now);
+        var answerId = Guid.NewGuid();
+
+        await using var db = new InterviewCopilotDbContext(options);
+        await db.GetService<IMigrator>().MigrateAsync("20261115201855_SessionRestartTiming", Ct);
+        db.UserAccounts.Add(account);
+        db.Sessions.Add(session);
+        await db.SaveChangesAsync(Ct);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO SuggestedAnswers (Id, SessionId, Question, QuestionType, Text, Version, Modifier, CreatedAt)
+            VALUES ({answerId}, {session.Id}, {"Existing question?"}, {0}, {"Existing answer"}, {1}, {0}, {0})
+            """, Ct);
+
+        await db.Database.MigrateAsync(Ct);
+        var answer = await db.SuggestedAnswers.SingleAsync(a => a.Id == answerId, Ct);
+
+        answer.Text.Should().Be("Existing answer");
+        answer.Origin.Should().Be(AnswerOrigin.Generated);
+        answer.SourceDocument.Should().BeNull();
     }
 
     private static async Task DrainAsync(AnswerGenerator generator, AnswerRequest request)

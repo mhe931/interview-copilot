@@ -18,8 +18,8 @@ const transcript: Transcript = {
     { atMs: 65_000, speaker: 'Candidate', text: 'Second line' },
   ],
   answers: [
-    { createdAt: '2026-10-15T09:10:00Z', question: 'Later question', questionType: 'Situational', version: 2, text: 'Later answer' },
-    { createdAt: '2026-10-15T09:05:00Z', question: 'Early question', questionType: 'Behavioral', version: 1, text: 'Early answer' },
+    { createdAt: '2026-10-15T09:10:00Z', question: 'Later question', questionType: 'Situational', version: 2, text: 'Later answer', origin: 'Generated', sourceDocument: null },
+    { createdAt: '2026-10-15T09:05:00Z', question: 'Early question', questionType: 'Behavioral', version: 1, text: 'Early answer', origin: 'Prepared', sourceDocument: 'questions.txt' },
   ],
   attempts: [
     { id: 'p2', question: 'Second practice?', answerText: 'Second answer', score: 9, feedback: 'Great', createdAt: '2026-10-15T09:30:00Z' },
@@ -65,9 +65,11 @@ describe('TranscriptPage', () => {
     expect(items[0]).toHaveTextContent('Behavioral');
     expect(items[0]).toHaveTextContent('v1');
     expect(items[0]).toHaveTextContent('Early answer');
+    expect(items[0]).toHaveTextContent('Prepared · questions.txt');
     expect(items[1]).toHaveTextContent('Later question');
     expect(items[1]).toHaveTextContent('Situational');
     expect(items[1]).toHaveTextContent('v2');
+    expect(items[1]).toHaveTextContent('Generated');
   });
 
   it('shows empty states', async () => {

@@ -27,6 +27,10 @@ computer unless you turn on a cloud provider yourself.
 - **Answer style:** short, balanced or long, using STAR, SMART or no framework.
 - **Your documents:** attach up to 10 per session (resume, job description, sales script, product
   docs…), and answers are grounded in them.
+- **Prepared answers:** a document can contain a question on its own line, followed by an `Answer:`
+  or `Suggested short answer:` label and an answer paragraph separated by a blank line. An exact question match reuses the labelled
+  answer locally and shows its source; ambiguous or unmatched questions use grounded generation.
+  Regenerate, Shorter and Longer always use the selected provider.
 - **Session prompt:** tell the AI who you're talking to and how to answer.
 - **Regenerate / Shorter / Longer** buttons on every answer.
 - **Overlay:** a semi-transparent, always-on-top window (opacity slider, default 85%) on Windows and

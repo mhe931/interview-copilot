@@ -80,7 +80,7 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
         _events.Publish(segment.SessionId, SessionEventTypes.QuestionDetected, new { segmentId = segment.Id, text = segment.Text });
 
         // A newer question replaces whatever is still being answered, even when auto-answer is now paused.
-        Replace(segment.SessionId, autoAnswer ? segment.Text : null);
+        Replace(segment.SessionId, segment.Id, autoAnswer ? segment.Text : null);
     }
 
     /// <summary>Completes when the session's current automatic answer (if any) has finished or been cancelled.</summary>
@@ -140,7 +140,7 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
     private partial void LogAnswerTimedOut(Guid sessionId);
 
     /// <summary>Stops the session's running answer and, when a question is given, starts answering it.</summary>
-    private void Replace(Guid sessionId, string? question)
+    private void Replace(Guid sessionId, Guid segmentId, string? question)
     {
         lock (_gate)
         {
@@ -155,7 +155,7 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
             }
 
             var entry = new InFlight(_answerTimeout);
-            entry.Task = Task.Run(() => RunAsync(sessionId, question, entry), CancellationToken.None);
+            entry.Task = Task.Run(() => RunAsync(sessionId, segmentId, question, entry), CancellationToken.None);
             _inFlight[sessionId] = entry;
             if (!_running.TryGetValue(sessionId, out var running))
             {
@@ -168,13 +168,13 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
     }
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "A failed background answer is reported as an error event and must not crash the host.")]
-    private async Task RunAsync(Guid sessionId, string question, InFlight self)
+    private async Task RunAsync(Guid sessionId, Guid segmentId, string question, InFlight self)
     {
         try
         {
             using var scope = _scopes.CreateScope();
             var generator = scope.ServiceProvider.GetRequiredService<AnswerGenerator>();
-            var (_, tokens) = await generator.GenerateAsync(new AnswerRequest(sessionId, question), self.Token);
+            var (_, tokens) = await generator.GenerateAsync(new AnswerRequest(sessionId, question, SegmentId: segmentId), self.Token);
             await foreach (var token in tokens.WithCancellation(self.Token))
             {
                 _ = token; // Consuming the stream is what publishes answer.delta / answer.done.
@@ -185,17 +185,17 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
             if (!self.CancelledByCaller)
             {
                 LogAnswerTimedOut(sessionId);
-                _events.Publish(sessionId, SessionEventTypes.Error, new { message = TimeoutMessage });
+                _events.Publish(sessionId, SessionEventTypes.Error, new { message = TimeoutMessage, segmentId });
             }
         }
         catch (LlmUnavailableException ex)
         {
-            _events.Publish(sessionId, SessionEventTypes.Error, new { message = ex.Message });
+            _events.Publish(sessionId, SessionEventTypes.Error, new { message = ex.Message, segmentId });
         }
         catch (Exception ex)
         {
             LogAnswerFailed(sessionId, ex.GetType().Name);
-            _events.Publish(sessionId, SessionEventTypes.Error, new { message = GenericFailureMessage });
+            _events.Publish(sessionId, SessionEventTypes.Error, new { message = GenericFailureMessage, segmentId });
         }
         finally
         {

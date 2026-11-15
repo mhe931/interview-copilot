@@ -121,7 +121,7 @@ public static class AnswerPromptBuilder
 
     private static string? FrameworkRule(AnswerFramework framework) => framework switch
     {
-        AnswerFramework.Star => "Structure: STAR - Situation, Task, Action, Result. Make the Result measurable when the documents allow.",
+        AnswerFramework.Star => "Use STAR (Situation, Task, Action, Result) only when a specific past example is relevant; otherwise answer directly. Make the Result measurable when the documents allow.",
         AnswerFramework.Smart => "Structure: SMART - make goals Specific, Measurable, Achievable, Relevant and Time-bound.",
         _ => null,
     };

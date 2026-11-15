@@ -58,6 +58,8 @@ internal sealed class QuestPdfTranscriptExporter : IPdfExporter
                         block.Item().Text(answer.Question).SemiBold();
                         block.Item().Text(string.Create(CultureInfo.InvariantCulture, $"{answer.QuestionType} · version {answer.Version}"))
                             .FontSize(8).FontColor(Colors.Grey.Darken1);
+                        block.Item().Text(answer.SourceDocument is null ? answer.Origin.ToString() : $"{answer.Origin} · {answer.SourceDocument}")
+                            .FontSize(8).FontColor(Colors.Grey.Darken1);
                         block.Item().Text(answer.Text);
                     });
                 }

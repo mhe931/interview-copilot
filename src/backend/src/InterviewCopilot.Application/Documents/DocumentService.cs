@@ -1,4 +1,5 @@
 using InterviewCopilot.Application.Common.Interfaces;
+using InterviewCopilot.Application.Copilot;
 using InterviewCopilot.Application.Sessions;
 using InterviewCopilot.Domain.Exceptions;
 
@@ -17,7 +18,8 @@ public sealed class DocumentService(
     SessionService sessions,
     IEnumerable<IDocumentTextExtractor> extractors,
     IUnitOfWork unitOfWork,
-    TimeProvider clock)
+    TimeProvider clock,
+    PreparedAnswerIndex? preparedAnswers = null)
 {
     public const long MaxFileSizeBytes = 20 * 1024 * 1024;
 
@@ -43,6 +45,7 @@ public sealed class DocumentService(
         var text = await extractor.ExtractAsync(fileName, content, cancellationToken);
         var document = session.AttachDocument(fileName, text, clock.GetUtcNow());
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        preparedAnswers?.Prepare(session.Id, session.Documents);
         return new DocumentSummaryDto(document.Id, document.FileName, document.Content.Length, document.CreatedAt);
     }
 
@@ -51,5 +54,6 @@ public sealed class DocumentService(
         var session = await sessions.LoadOwnedAsync(ownerId, sessionId, cancellationToken);
         session.RemoveDocument(documentId);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        preparedAnswers?.Prepare(session.Id, session.Documents);
     }
 }

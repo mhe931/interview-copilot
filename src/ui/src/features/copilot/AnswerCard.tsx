@@ -19,6 +19,11 @@ export function AnswerCard({ answer, onModify }: { answer: AnswerState; onModify
             {QUESTION_TYPE_LABELS[answer.questionType]} · v{answer.version}
           </span>
         )}
+        {answer.origin && (
+          <span className="text-xs text-muted-foreground">
+            {answer.origin}{answer.sourceDocument ? ` · ${answer.sourceDocument}` : ''}
+          </span>
+        )}
       </header>
       <p className="whitespace-pre-wrap text-base leading-relaxed">{answer.text || (busy ? 'Thinking…' : '')}</p>
       {answer.error && (

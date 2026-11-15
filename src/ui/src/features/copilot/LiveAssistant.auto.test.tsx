@@ -42,13 +42,28 @@ describe('LiveAssistant automatic answers', () => {
     expect(screen.getByText('Tell me about a time you led a team.')).toBeInTheDocument();
     expect(screen.getByText('Thinking…')).toBeInTheDocument();
 
-    send(socket, 'answer.delta', { token: 'I led ', version: 1, questionType: 'Behavioral' });
-    send(socket, 'answer.delta', { token: 'it.', version: 1, questionType: 'Behavioral' });
+    send(socket, 'answer.delta', { segmentId: 'g1', token: 'I led ', version: 1, questionType: 'Behavioral' });
+    send(socket, 'answer.delta', { segmentId: 'g1', token: 'it.', version: 1, questionType: 'Behavioral' });
     expect(screen.getByText('I led it.')).toBeInTheDocument();
     expect(screen.getByText('Behavioral · v1')).toBeInTheDocument();
 
-    send(socket, 'answer.done', { version: 1, questionType: 'Behavioral', answerId: 'a1' });
+    send(socket, 'answer.done', { segmentId: 'g1', version: 1, questionType: 'Behavioral', answerId: 'a1' });
     expect(screen.getByRole('button', { name: /Shorter/ })).toBeEnabled();
+  });
+
+  it('labels a prepared answer and its source', async () => {
+    const { api } = fakeApi(() => json({}));
+    renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connected() });
+    const socket = await openSocket();
+
+    send(socket, 'question.detected', { segmentId: 'g1', text: 'What is your method?' });
+    send(socket, 'answer.delta', {
+      segmentId: 'g1', token: 'A prepared answer.', version: 1, questionType: 'TechnicalKnowledge',
+      origin: 'Prepared', sourceDocument: 'questions.txt',
+    });
+
+    expect(screen.getByText('A prepared answer.')).toBeInTheDocument();
+    expect(screen.getByText('Prepared · questions.txt')).toBeInTheDocument();
   });
 
   it('replaces the answer when a newer question is detected', async () => {
@@ -57,9 +72,9 @@ describe('LiveAssistant automatic answers', () => {
     const socket = await openSocket();
 
     send(socket, 'question.detected', { segmentId: 'g1', text: 'First question here?' });
-    send(socket, 'answer.delta', { token: 'old', version: 1, questionType: 'General' });
+    send(socket, 'answer.delta', { segmentId: 'g1', token: 'old', version: 1, questionType: 'General' });
     send(socket, 'question.detected', { segmentId: 'g2', text: 'Second question here?' });
-    send(socket, 'answer.delta', { token: 'new', version: 1, questionType: 'General' });
+    send(socket, 'answer.delta', { segmentId: 'g2', token: 'new', version: 1, questionType: 'General' });
 
     expect(screen.queryByText('First question here?')).not.toBeInTheDocument();
     expect(screen.getByText('Second question here?')).toBeInTheDocument();
@@ -77,22 +92,52 @@ describe('LiveAssistant automatic answers', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     send(socket, 'question.detected', { segmentId: 'g1', text: 'Why do you want this job?' });
-    send(socket, 'error', { message: "Can't reach Ollama." });
+    send(socket, 'error', { segmentId: 'g1', message: "Can't reach Ollama." });
     expect(screen.getByRole('alert')).toHaveTextContent("Can't reach Ollama.");
   });
 
   it('does not double up with the events a manual answer also publishes', async () => {
-    const { api } = fakeApi(() => sse(['meta', '{"questionType":"Behavioral","version":1}'], ['delta', 'Typed'], ['done', '']));
+    const { api, fetchImpl } = fakeApi(() => sse(['meta', '{"questionType":"Behavioral","version":1}'], ['delta', 'Typed'], ['done', '']));
     renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connected() });
     const socket = await openSocket();
 
     await userEvent.type(screen.getByLabelText('Question'), 'Typed question here');
     await userEvent.click(screen.getByRole('button', { name: 'Answer' }));
     expect(await screen.findByText('Typed')).toBeInTheDocument();
-    send(socket, 'answer.delta', { token: 'Typed', version: 1, questionType: 'Behavioral' });
-    send(socket, 'answer.done', { version: 1, questionType: 'Behavioral', answerId: 'a1' });
+    const post = fetchImpl.mock.calls.find((call) => call[1]?.method === 'POST')!;
+    const { requestId } = JSON.parse(String(post[1]!.body)) as { requestId: string };
+    send(socket, 'answer.started', { requestId, question: 'Typed question here' });
+    expect(screen.getByText('Typed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Shorter/ })).toBeEnabled();
+    send(socket, 'answer.delta', { requestId, token: 'Typed', version: 1, questionType: 'Behavioral' });
+    send(socket, 'answer.done', { requestId, version: 1, questionType: 'Behavioral', answerId: 'a1' });
 
     expect(screen.getByText('Typed')).toBeInTheDocument();
+  });
+
+  it('streams a manual answer started in another window', async () => {
+    const { api } = fakeApi(() => json({}));
+    renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connected() });
+    const socket = await openSocket();
+
+    send(socket, 'answer.started', { requestId: 'manual-1', question: 'A typed question?' });
+    send(socket, 'answer.delta', { requestId: 'manual-1', token: 'First', version: 1, questionType: 'Experience' });
+    expect(screen.getByText('First')).toBeInTheDocument();
+    send(socket, 'answer.delta', { requestId: 'manual-1', token: ' part', version: 1, questionType: 'Experience' });
+    expect(screen.getByText('First part')).toBeInTheDocument();
+    send(socket, 'answer.done', { requestId: 'manual-1', version: 1 });
+    expect(screen.getByRole('button', { name: /Longer/ })).toBeEnabled();
+  });
+
+  it('shows failures for a manual answer started in another window', async () => {
+    const { api } = fakeApi(() => json({}));
+    renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connected() });
+    const socket = await openSocket();
+
+    send(socket, 'answer.started', { requestId: 'manual-1', question: 'A typed question?' });
+    send(socket, 'error', { requestId: 'manual-1', message: 'Provider unavailable.' });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Provider unavailable.');
   });
 
   it('pauses and resumes auto-answer through the API', async () => {
@@ -156,7 +201,7 @@ describe('LiveAssistant automatic answers', () => {
     const { api } = fakeApi(() => json({}));
     const view = renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connected() });
     const socket = await openSocket();
-    send(socket, 'question.detected', { text: 'Old question' });
+    send(socket, 'question.detected', { segmentId: 'g1', text: 'Old question' });
     expect(screen.getByText('Old question')).toBeInTheDocument();
     view.unmount();
     expect(socket.closed).toBe(true);

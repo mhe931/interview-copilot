@@ -107,6 +107,9 @@ export function TranscriptPage() {
                 <div className="text-xs text-muted-foreground">
                   {QUESTION_TYPE_LABELS[answer.questionType]} · v{answer.version}
                 </div>
+                <div className="text-xs text-muted-foreground">
+                  {answer.origin}{answer.sourceDocument ? ` · ${answer.sourceDocument}` : ''}
+                </div>
                 <p className="whitespace-pre-wrap text-sm">{answer.text}</p>
               </li>
             ))}
