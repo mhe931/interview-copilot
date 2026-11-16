@@ -30,7 +30,9 @@ internal sealed class BenchmarkRunner(
 
     public async Task<BenchmarkReport> RunAsync(
         IReadOnlyList<Question> questions,
+        string provider,
         string model,
+        string? apiKey,
         HardwareInfo hardware,
         IProgress<QuestionResult>? progress,
         CancellationToken cancellationToken)
@@ -40,12 +42,18 @@ internal sealed class BenchmarkRunner(
         var credentials = new Credentials(username, passwordFactory());
 
         await RegisterAndSignInAsync(credentials, cancellationToken);
+        await SetLlmChoiceAsync(provider, model, cancellationToken);
         var sessionId = await CreateAndStartSessionAsync(cancellationToken);
 
         var runner = new QuestionRunner(http, clock, questionTimeout);
         var results = new List<QuestionResult>(questions.Count);
         try
         {
+            if (apiKey is not null)
+            {
+                await SetSessionKeyAsync(sessionId, provider, apiKey, cancellationToken);
+            }
+
             await runner.RunAsync(sessionId, 0, new Question("TellMeAboutYourself", WarmUpQuestion), cancellationToken); // warm-up, not counted
             for (var i = 0; i < questions.Count; i++)
             {
@@ -59,7 +67,7 @@ internal sealed class BenchmarkRunner(
             await EndSessionAsync(sessionId);
         }
 
-        return new BenchmarkReport(dateUtc, hardware, model, results);
+        return new BenchmarkReport(dateUtc, hardware, provider, model, results);
     }
 
     private async Task RegisterAndSignInAsync(Credentials credentials, CancellationToken ct)
@@ -105,6 +113,25 @@ internal sealed class BenchmarkRunner(
         return sessionId;
     }
 
+    private async Task SetLlmChoiceAsync(string provider, string model, CancellationToken ct)
+    {
+        using var response = await PutAsync("/api/preferences/llm", new LlmChoice(provider, model), ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new BenchmarkSetupException($"Could not select the benchmark model (HTTP {(int)response.StatusCode}).");
+        }
+    }
+
+    private async Task SetSessionKeyAsync(Guid sessionId, string provider, string apiKey, CancellationToken ct)
+    {
+        var path = $"/api/sessions/{sessionId}/keys/{Uri.EscapeDataString(provider)}";
+        using var response = await PutAsync(path, new SessionKey(apiKey), ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new BenchmarkSetupException($"Could not hand the benchmark key to the live session (HTTP {(int)response.StatusCode}).");
+        }
+    }
+
     /// <summary>Best effort: the measurement is already taken, and cancellation must not skip the cleanup.</summary>
     private async Task EndSessionAsync(Guid sessionId)
     {
@@ -130,6 +157,18 @@ internal sealed class BenchmarkRunner(
         }
     }
 
+    private async Task<HttpResponseMessage> PutAsync(string path, object body, CancellationToken ct)
+    {
+        try
+        {
+            return await http.PutAsJsonAsync(path, body, ct);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new BenchmarkSetupException($"Cannot reach the backend at {http.BaseAddress}: {ex.Message}. {BackendHint}", ex);
+        }
+    }
+
     private static async Task<string?> ReadStringAsync(HttpResponseMessage response, string property, CancellationToken ct)
     {
         try
@@ -144,6 +183,10 @@ internal sealed class BenchmarkRunner(
     }
 
     private sealed record Credentials(string Username, string Password);
+
+    private sealed record LlmChoice(string Provider, string Model);
+
+    private sealed record SessionKey(string Key);
 
     private sealed record CreateSession(
         string Title,

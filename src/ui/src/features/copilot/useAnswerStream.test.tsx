@@ -1,17 +1,17 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppProvider } from '@/lib/app-context';
 import { createWebPlatform } from '@/platform';
 import { fakeApi, json, sse } from '@/test/helpers';
 import { useAnswerStream } from './useAnswerStream';
 
-function setup(prefs: unknown | Response) {
+function setup(prefs: unknown | Response, answerResponse = sse(['meta', '{"questionType":"Behavioral","version":1}'], ['delta', 'Hi'], ['done', ''])) {
   const askKeys: (string | null)[] = [];
   const { api } = fakeApi((url, init) => {
     if (url.endsWith('/api/preferences')) return prefs instanceof Response ? prefs : json(prefs);
     askKeys.push(new Headers(init.headers).get('X-Llm-Api-Key'));
-    return sse(['meta', '{"questionType":"Behavioral","version":1}'], ['delta', 'Hi'], ['done', '']);
+    return answerResponse;
   });
   const platform = createWebPlatform();
   const getApiKey = vi.spyOn(platform, 'getApiKey').mockImplementation((provider) => Promise.resolve(`key-${provider}`));
@@ -24,6 +24,8 @@ function setup(prefs: unknown | Response) {
 }
 
 describe('useAnswerStream key header', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('sends the key of the account chat provider', async () => {
     const { wrapper, getApiKey, askKeys } = setup({ llmProvider: 'openai', defaultLlmProvider: 'ollama' });
     const { result } = renderHook(() => useAnswerStream('s1'), { wrapper });
@@ -84,5 +86,21 @@ describe('useAnswerStream key header', () => {
     resolveKey('key');
     await pending;
     expect(askKeys).toEqual([]);
+  });
+
+  it('keeps partial answer text when the stream times out and records display timing', async () => {
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    const { wrapper } = setup(
+      { defaultLlmProvider: 'ollama' },
+      sse(['meta', '{"questionType":"Behavioral","version":1}'], ['delta', 'Useful partial answer'], ['error', 'Answer streaming stalled.']),
+    );
+    const { result } = renderHook(() => useAnswerStream('s1'), { wrapper });
+
+    await act(async () => result.current.ask('Why this company?'));
+
+    expect(result.current.answer.text).toBe('Useful partial answer');
+    expect(result.current.answer.status).toBe('error');
+    expect(result.current.answer.error).toBe('Answer streaming stalled.');
+    expect(debug).toHaveBeenCalledWith('[answer-timing]', expect.objectContaining({ stage: 'first-displayed' }));
   });
 });

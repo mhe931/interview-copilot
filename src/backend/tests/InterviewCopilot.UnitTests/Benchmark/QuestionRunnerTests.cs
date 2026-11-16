@@ -15,7 +15,7 @@ public sealed class QuestionRunnerTests
         var clock = new FakeClock();
         var handler = new DelegateHandler((_, _) => Task.FromResult(DelegateHandler.Sse(
             [
-                "event: meta\ndata: {}\n\n",
+                "event: meta\ndata: {\"preparedAnswerLookupMs\":3.25}\n\n",
                 "event: delta\ndata: Hel\n\n",
                 "event: delta\ndata: lo\n\n",
                 "event: done\ndata: \n\n",
@@ -30,9 +30,12 @@ public sealed class QuestionRunnerTests
         result.Type.Should().Be("Coding");
         result.TtftMs.Should().Be(1000); // 100 (meta) + 900 (first delta)
         result.TotalMs.Should().Be(1750);
+        result.PreparedAnswerLookupMs.Should().Be(3.25);
         handler.Requests.Should().ContainSingle();
         handler.Requests[0].Path.Should().Be($"/api/sessions/{SessionId}/answers");
         handler.Requests[0].Body.Should().Contain("Reverse a linked list.");
+        using var request = System.Text.Json.JsonDocument.Parse(handler.Requests[0].Body);
+        request.RootElement.GetProperty("requestId").GetGuid().Should().NotBeEmpty();
     }
 
     [Fact]

@@ -182,6 +182,7 @@ export interface AnswerHeader {
   version: number;
   origin: AnswerOrigin;
   sourceDocument: string | null;
+  preparedAnswerLookupMs?: number;
 }
 
 export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {

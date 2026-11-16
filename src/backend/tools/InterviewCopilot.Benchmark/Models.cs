@@ -4,7 +4,13 @@ namespace InterviewCopilot.Benchmark;
 internal sealed record Question(string Type, string Text);
 
 /// <summary>Outcome of one question. A failed run keeps its error and is excluded from the statistics.</summary>
-internal sealed record QuestionResult(int Number, string Type, double? TtftMs, double? TotalMs, string? Error)
+internal sealed record QuestionResult(
+    int Number,
+    string Type,
+    double? TtftMs,
+    double? TotalMs,
+    string? Error,
+    double? PreparedAnswerLookupMs = null)
 {
     public bool Succeeded => Error is null;
 }
@@ -14,6 +20,7 @@ internal sealed record HardwareInfo(string Cpu, int LogicalCores, long TotalRamB
 internal sealed record BenchmarkReport(
     DateTimeOffset DateUtc,
     HardwareInfo Hardware,
+    string Provider,
     string Model,
     IReadOnlyList<QuestionResult> Results);
 

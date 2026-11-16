@@ -74,9 +74,9 @@ public class Wave2ContractTests
     [Fact]
     public async Task Should_DefaultStreamEndToNoOp_And_NameAutoAnswerEvent()
     {
-        IAudioFrameSink sink = new AudioStatsSink(new FixedClock());
+        var sink = new AudioStatsSink(new FixedClock());
 
-        await sink.OnStreamEndedAsync(Guid.NewGuid(), Ct);
+        await ((IAudioFrameSink)sink).OnStreamEndedAsync(Guid.NewGuid(), Ct);
 
         SessionEventTypes.AutoAnswerState.Should().Be("autoanswer.state");
     }

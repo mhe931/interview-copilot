@@ -5,6 +5,8 @@ internal sealed record LatencySummary(
     int Succeeded,
     double? TtftP50,
     double? TtftP95,
+    double? PreparedLookupP50,
+    double? PreparedLookupP95,
     double? TotalP50,
     double? TotalP95)
 {
@@ -36,12 +38,17 @@ internal static class LatencyStats
     {
         var ok = results.Where(r => r.Succeeded && r.TtftMs is not null && r.TotalMs is not null).ToArray();
         var ttft = ok.Select(r => r.TtftMs!.Value).ToArray();
+        var preparedLookup = ok.Where(r => r.PreparedAnswerLookupMs is not null)
+            .Select(r => r.PreparedAnswerLookupMs!.Value)
+            .ToArray();
         var total = ok.Select(r => r.TotalMs!.Value).ToArray();
         return new LatencySummary(
             results.Count,
             ok.Length,
             Percentile(ttft, 50),
             Percentile(ttft, 95),
+            Percentile(preparedLookup, 50),
+            Percentile(preparedLookup, 95),
             Percentile(total, 50),
             Percentile(total, 95));
     }

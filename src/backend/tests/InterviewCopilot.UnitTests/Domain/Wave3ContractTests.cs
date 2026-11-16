@@ -15,6 +15,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace InterviewCopilot.UnitTests.Domain;
@@ -123,7 +124,7 @@ public class Wave3ContractTests
         var keys = new InMemorySessionKeyStore();
         var cloud = new NamedLlm("openai");
         var generator = new AnswerGenerator(store, store, store, new LlmProviderResolver([new FakeLlm("local"), cloud]), keys,
-            Options.Create(new LlmOptions()), new FixedClock(), new NullSessionEventPublisher(), preferences);
+            Options.Create(new LlmOptions()), new FixedClock(), new NullSessionEventPublisher(), preferences, NullLogger<AnswerGenerator>.Instance);
 
         await DrainAsync(generator, new AnswerRequest(session.Id, "Why us?", ApiKey: "request-key"));
         cloud.LastRequest!.ApiKey.Should().Be("request-key");

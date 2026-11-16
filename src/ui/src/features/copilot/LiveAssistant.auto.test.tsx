@@ -12,6 +12,18 @@ async function connected() {
   return platform;
 }
 
+async function connectedWithMic() {
+  const platform = await connected();
+  Object.defineProperty(platform, 'kind', { value: 'desktop' });
+  vi.spyOn(platform, 'getCaptureStatus').mockResolvedValue({
+    state: 'live',
+    interviewer: true,
+    mic: true,
+    message: null,
+  });
+  return platform;
+}
+
 async function openSocket() {
   await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
   const socket = FakeWebSocket.last;
@@ -49,6 +61,28 @@ describe('LiveAssistant automatic answers', () => {
 
     send(socket, 'answer.done', { segmentId: 'g1', version: 1, questionType: 'Behavioral', answerId: 'a1' });
     expect(screen.getByRole('button', { name: /Shorter/ })).toBeEnabled();
+  });
+
+  it('stops only the latest automatic answer and keeps its partial text', async () => {
+    const { api, fetchImpl } = fakeApi((url) => {
+      if (url.endsWith('/answers/segment-2/cancel')) return new Response(null, { status: 204 });
+      return json({});
+    });
+    renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connected() });
+    const socket = await openSocket();
+
+    send(socket, 'question.detected', { segmentId: 'segment-1', text: 'First question?' });
+    send(socket, 'answer.delta', { segmentId: 'segment-1', token: 'Old partial' });
+    send(socket, 'question.detected', { segmentId: 'segment-2', text: 'Latest question?' });
+    send(socket, 'answer.delta', { segmentId: 'segment-2', token: 'Latest partial' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Stop answer' }));
+
+    const cancel = fetchImpl.mock.calls.find((call) => String(call[0]).endsWith('/answers/segment-2/cancel'));
+    expect(cancel?.[1]?.method).toBe('POST');
+    expect(await screen.findByText('Answer stopped.')).toBeInTheDocument();
+    expect(screen.getByText('Latest partial')).toBeInTheDocument();
+    expect(screen.queryByText('Old partial')).not.toBeInTheDocument();
   });
 
   it('labels a prepared answer and its source', async () => {
@@ -96,6 +130,66 @@ describe('LiveAssistant automatic answers', () => {
     expect(screen.getByRole('alert')).toHaveTextContent("Can't reach Ollama.");
   });
 
+  it('uses only an armed mic question and ignores ordinary candidate speech', async () => {
+    const { api, fetchImpl } = fakeApi((_url, init) => init.method === 'POST'
+      ? sse(['meta', '{"questionType":"Behavioral","version":1}'], ['delta', 'Mic answer'], ['done', ''])
+      : json({}));
+    renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connectedWithMic() });
+    const socket = await openSocket();
+
+    send(socket, 'transcript.segment', { speaker: 'Candidate', text: 'Tell me about a time you led a team.' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Ask from mic' }));
+    expect(await screen.findByText(/Mic question mode is active/)).toBeInTheDocument();
+    send(socket, 'transcript.segment', { speaker: 'Candidate', text: 'I led a team with six engineers.' });
+    expect(await screen.findByText(/Ordinary speech was not sent/)).toBeInTheDocument();
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Ask from mic' }));
+    expect(await screen.findByText(/Mic question mode is active/)).toBeInTheDocument();
+    send(socket, 'transcript.segment', { speaker: 'Candidate', text: 'Tell me about a time you led a team.' });
+
+    expect(await screen.findByText('Mic answer')).toBeInTheDocument();
+    const post = fetchImpl.mock.calls.find((call) => call[1]?.method === 'POST')!;
+    expect(JSON.parse(String(post[1]!.body))).toMatchObject({ question: 'Tell me about a time you led a team.' });
+  });
+
+  it('cancels mic question mode with Escape', async () => {
+    const { api, fetchImpl } = fakeApi(() => json({}));
+    renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connectedWithMic() });
+    await openSocket();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Ask from mic' }));
+    expect(await screen.findByText(/Mic question mode is active/)).toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+
+    expect(await screen.findByText('Microphone question mode stopped.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ask from mic' })).toBeEnabled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('offers an explicit retry when the mic repeats a question just heard from meeting audio', async () => {
+    const { api, fetchImpl } = fakeApi((_url, init) => init.method === 'POST'
+      ? sse(['meta', '{"questionType":"Behavioral","version":1}'], ['delta', 'Retried answer'], ['done', ''])
+      : json({}));
+    renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connectedWithMic() });
+    const socket = await openSocket();
+    const question = 'Tell me about a time you led a team.';
+
+    send(socket, 'question.detected', { segmentId: 'system-1', text: question });
+    await userEvent.click(screen.getByRole('button', { name: 'Ask from mic' }));
+    expect(await screen.findByText(/Mic question mode is active/)).toBeInTheDocument();
+    send(socket, 'transcript.segment', { speaker: 'Candidate', text: question });
+
+    expect(await screen.findByRole('button', { name: 'Answer anyway' })).toBeInTheDocument();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Answer anyway' }));
+    expect(await screen.findByText('Retried answer')).toBeInTheDocument();
+    const post = fetchImpl.mock.calls.find((call) => call[1]?.method === 'POST')!;
+    expect(JSON.parse(String(post[1]!.body))).toMatchObject({ question });
+  });
+
   it('does not double up with the events a manual answer also publishes', async () => {
     const { api, fetchImpl } = fakeApi(() => sse(['meta', '{"questionType":"Behavioral","version":1}'], ['delta', 'Typed'], ['done', '']));
     renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connected() });
@@ -113,6 +207,33 @@ describe('LiveAssistant automatic answers', () => {
     send(socket, 'answer.done', { requestId, version: 1, questionType: 'Behavioral', answerId: 'a1' });
 
     expect(screen.getByText('Typed')).toBeInTheDocument();
+  });
+
+  it('lets the user stop a streaming answer and preserves its partial text', async () => {
+    const { api, fetchImpl } = fakeApi((url, init) => {
+      if (url.endsWith('/api/preferences')) return json({ defaultLlmProvider: 'ollama' });
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('event: meta\ndata: {"questionType":"Behavioral","version":1}\n\n'));
+          controller.enqueue(new TextEncoder().encode('event: delta\ndata: Partial answer\n\n'));
+          init.signal?.addEventListener('abort', () => controller.close(), { once: true });
+        },
+      }), { headers: { 'Content-Type': 'text/event-stream' } }));
+    });
+    renderWithApp(<LiveAssistant sessionId="s1" />, { api, platform: await connected() });
+    await openSocket();
+
+    await userEvent.type(screen.getByLabelText('Question'), 'A question?');
+    await userEvent.click(screen.getByRole('button', { name: 'Answer' }));
+    await screen.findByText('Partial answer');
+
+    const post = fetchImpl.mock.calls.find((call) => call[1]?.method === 'POST')!;
+    const signal = post[1]!.signal as AbortSignal;
+    await userEvent.click(screen.getByRole('button', { name: 'Stop answer' }));
+
+    expect(signal.aborted).toBe(true);
+    expect(await screen.findByText('Answer stopped.')).toBeInTheDocument();
+    expect(screen.getByText('Partial answer')).toBeInTheDocument();
   });
 
   it('streams a manual answer started in another window', async () => {

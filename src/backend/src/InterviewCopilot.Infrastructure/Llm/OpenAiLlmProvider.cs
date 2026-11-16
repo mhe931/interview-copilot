@@ -3,11 +3,12 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using InterviewCopilot.Application.Providers;
+using Microsoft.Extensions.Logging;
 
 namespace InterviewCopilot.Infrastructure.Llm;
 
 /// <summary>OpenAI Chat Completions, streamed over SSE (BYOK, opt-in; #30).</summary>
-internal sealed class OpenAiLlmProvider(HttpClient http) : CloudLlmProviderBase(http)
+internal sealed class OpenAiLlmProvider(HttpClient http, ILogger<OpenAiLlmProvider>? logger = null) : CloudLlmProviderBase(http, logger)
 {
     public override string Name => ProviderNames.OpenAi;
 

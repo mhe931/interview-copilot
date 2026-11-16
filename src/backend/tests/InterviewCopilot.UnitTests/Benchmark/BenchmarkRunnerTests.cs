@@ -13,7 +13,7 @@ public sealed class BenchmarkRunnerTests
 
     private static readonly string[] OkStream =
     [
-        "event: meta\ndata: {}\n\nevent: delta\ndata: A\n\nevent: done\ndata: \n\n",
+        "event: meta\ndata: {\"preparedAnswerLookupMs\":5.5}\n\nevent: delta\ndata: A\n\nevent: done\ndata: \n\n",
     ];
 
     [Fact]
@@ -23,12 +23,13 @@ public sealed class BenchmarkRunnerTests
         var runner = NewRunner(handler);
         Question[] questions = [new("Coding", "Q1?"), new("Behavioral", "Q2?")];
 
-        var report = await runner.RunAsync(questions, "llama3.2:3b", Hardware, progress: null, CancellationToken.None);
+        var report = await runner.RunAsync(questions, "ollama", "llama3.2:3b", null, Hardware, progress: null, CancellationToken.None);
 
         var paths = handler.Requests.Select(r => $"{r.Method} {r.Path}").ToArray();
         paths.Should().Equal(
             "POST /api/auth/register",
             "POST /api/auth/sign-in",
+            "PUT /api/preferences/llm",
             "POST /api/sessions",
             $"POST /api/sessions/{SessionId}/start",
             $"POST /api/sessions/{SessionId}/answers", // warm-up
@@ -38,6 +39,10 @@ public sealed class BenchmarkRunnerTests
         report.Results.Should().HaveCount(2); // warm-up is not counted
         report.Results.Select(r => r.Number).Should().Equal(1, 2);
         report.Results.Should().OnlyContain(r => r.Succeeded);
+        report.Results.All(r =>
+            r.PreparedAnswerLookupMs.HasValue && Math.Abs(r.PreparedAnswerLookupMs.Value - 5.5) < 0.001)
+            .Should().BeTrue();
+        report.Provider.Should().Be("ollama");
         report.Model.Should().Be("llama3.2:3b");
         report.DateUtc.Should().Be(Now.GetUtcNow());
     }
@@ -48,7 +53,7 @@ public sealed class BenchmarkRunnerTests
         var handler = ScriptedBackend(_ => DelegateHandler.Sse(OkStream));
         var runner = NewRunner(handler);
 
-        await runner.RunAsync([new("Coding", "Q?")], "m", Hardware, null, CancellationToken.None);
+        await runner.RunAsync([new("Coding", "Q?")], "ollama", "m", null, Hardware, null, CancellationToken.None);
 
         using var register = JsonDocument.Parse(handler.Requests[0].Body);
         register.RootElement.GetProperty("username").GetString().Should().Be("benchmark-20261016090807");
@@ -57,10 +62,38 @@ public sealed class BenchmarkRunnerTests
         using var signIn = JsonDocument.Parse(handler.Requests[1].Body);
         signIn.RootElement.GetProperty("password").GetString().Should().Be(registered);
 
-        using var session = JsonDocument.Parse(handler.Requests[2].Body);
+        using var choice = JsonDocument.Parse(handler.Requests[2].Body);
+        choice.RootElement.GetProperty("provider").GetString().Should().Be("ollama");
+        choice.RootElement.GetProperty("model").GetString().Should().Be("m");
+        using var session = JsonDocument.Parse(handler.Requests[3].Body);
         session.RootElement.GetProperty("mode").GetString().Should().Be("LiveInterview");
         session.RootElement.GetProperty("answerLength").GetString().Should().Be("Balanced");
         session.RootElement.GetProperty("framework").GetString().Should().Be("None");
+    }
+
+    [Fact]
+    public async Task RunAsync_ShouldConfigureCloudProviderAndHandOffKeyToLiveSession()
+    {
+        var handler = ScriptedBackend(_ => DelegateHandler.Sse(OkStream));
+        var runner = NewRunner(handler);
+
+        var report = await runner.RunAsync(
+            [new("Coding", "Q?")],
+            "google",
+            "gemini-3.5-flash-lite",
+            "not-a-real-key",
+            Hardware,
+            null,
+            CancellationToken.None);
+
+        using var choice = JsonDocument.Parse(handler.Requests.Single(r => r.Path == "/api/preferences/llm").Body);
+        choice.RootElement.GetProperty("provider").GetString().Should().Be("google");
+        choice.RootElement.GetProperty("model").GetString().Should().Be("gemini-3.5-flash-lite");
+        var keyHandoff = handler.Requests.Single(r => r.Path.EndsWith("/keys/google", StringComparison.Ordinal));
+        using var key = JsonDocument.Parse(keyHandoff.Body);
+        key.RootElement.GetProperty("key").GetString().Should().Be("not-a-real-key");
+        report.Provider.Should().Be("google");
+        report.Model.Should().Be("gemini-3.5-flash-lite");
     }
 
     [Fact]
@@ -72,7 +105,7 @@ public sealed class BenchmarkRunnerTests
             : DelegateHandler.Sse(OkStream));
         var runner = NewRunner(handler);
 
-        var report = await runner.RunAsync([new("Coding", "Q1?"), new("Coding", "Q2?")], "m", Hardware, null, CancellationToken.None);
+        var report = await runner.RunAsync([new("Coding", "Q1?"), new("Coding", "Q2?")], "ollama", "m", null, Hardware, null, CancellationToken.None);
 
         report.Results[0].Succeeded.Should().BeFalse();
         report.Results[1].Succeeded.Should().BeTrue();
@@ -85,7 +118,7 @@ public sealed class BenchmarkRunnerTests
         var runner = NewRunner(handler);
         var seen = new List<QuestionResult>();
 
-        await runner.RunAsync([new("Coding", "Q1?"), new("Coding", "Q2?")], "m", Hardware, new SyncProgress(seen.Add), CancellationToken.None);
+        await runner.RunAsync([new("Coding", "Q1?"), new("Coding", "Q2?")], "ollama", "m", null, Hardware, new SyncProgress(seen.Add), CancellationToken.None);
 
         seen.Select(r => r.Number).Should().Equal(1, 2);
     }
@@ -96,7 +129,7 @@ public sealed class BenchmarkRunnerTests
         var handler = new DelegateHandler((_, _) => throw new HttpRequestException("refused"));
         var runner = NewRunner(handler);
 
-        var act = () => runner.RunAsync([new("Coding", "Q?")], "m", Hardware, null, CancellationToken.None);
+        var act = () => runner.RunAsync([new("Coding", "Q?")], "ollama", "m", null, Hardware, null, CancellationToken.None);
 
         await act.Should().ThrowAsync<BenchmarkSetupException>().WithMessage("*Start the backend first: pnpm dev:backend*");
     }
@@ -111,7 +144,7 @@ public sealed class BenchmarkRunnerTests
         }));
         var runner = NewRunner(handler);
 
-        var act = () => runner.RunAsync([new("Coding", "Q?")], "m", Hardware, null, CancellationToken.None);
+        var act = () => runner.RunAsync([new("Coding", "Q?")], "ollama", "m", null, Hardware, null, CancellationToken.None);
 
         await act.Should().ThrowAsync<BenchmarkSetupException>().WithMessage("*sign in*");
     }
@@ -127,7 +160,7 @@ public sealed class BenchmarkRunnerTests
         });
         var runner = NewRunner(handler);
 
-        var act = () => runner.RunAsync([new("Coding", "Q?")], "m", Hardware, null, cts.Token);
+        var act = () => runner.RunAsync([new("Coding", "Q?")], "ollama", "m", null, Hardware, null, cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         handler.Requests[^1].Path.Should().EndWith("/end");

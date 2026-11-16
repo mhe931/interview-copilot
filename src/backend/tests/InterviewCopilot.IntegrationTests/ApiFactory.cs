@@ -83,6 +83,10 @@ public sealed class ScriptedLlm : ILlmProvider
 
     public bool Fail { get; set; }
 
+    public bool BlockAfterFirstToken { get; set; }
+
+    public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public string Name => ProviderNames.Ollama; // stands in for the configured default provider
 
     public async IAsyncEnumerable<string> StreamAsync(LlmRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -96,6 +100,18 @@ public sealed class ScriptedLlm : ILlmProvider
         {
             await Task.Yield();
             yield return token;
+            if (BlockAfterFirstToken)
+            {
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    CancellationObserved.TrySetResult();
+                    throw;
+                }
+            }
         }
     }
 }

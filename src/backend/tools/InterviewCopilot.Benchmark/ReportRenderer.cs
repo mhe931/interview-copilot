@@ -16,6 +16,7 @@ internal static class ReportRenderer
         sb.Append("# Copilot latency benchmark (NFR-05)\n\n");
         sb.Append("Time to first answer token (TTFT) and total time for each question, measured through the real HTTP API.\n\n");
         sb.Append(inv, $"- Date (UTC): {report.DateUtc.UtcDateTime:yyyy-MM-dd HH:mm:ss}\n");
+        sb.Append(inv, $"- Provider: {report.Provider}\n");
         sb.Append(inv, $"- Model: {report.Model}\n");
         sb.Append(inv, $"- CPU: {report.Hardware.Cpu}\n");
         sb.Append(inv, $"- Logical cores: {report.Hardware.LogicalCores}\n");
@@ -24,18 +25,19 @@ internal static class ReportRenderer
         sb.Append(inv, $"- Questions: {summary.Succeeded} of {summary.Total} succeeded\n\n");
 
         sb.Append("## Results\n\n");
-        sb.Append("| # | Type | TTFT (ms) | Total (ms) | Status |\n");
-        sb.Append("|---|------|-----------|------------|--------|\n");
+        sb.Append("| # | Type | Prepared lookup (ms) | TTFT (ms) | Total (ms) | Status |\n");
+        sb.Append("|---|------|----------------------|-----------|------------|--------|\n");
         foreach (var r in report.Results)
         {
             var status = r.Succeeded ? "ok" : $"failed: {Escape(r.Error!)}";
-            sb.Append(inv, $"| {r.Number} | {r.Type} | {Ms(r.Succeeded ? r.TtftMs : null)} | {Ms(r.Succeeded ? r.TotalMs : null)} | {status} |\n");
+            sb.Append(inv, $"| {r.Number} | {r.Type} | {Ms(r.Succeeded ? r.PreparedAnswerLookupMs : null)} | {Ms(r.Succeeded ? r.TtftMs : null)} | {Ms(r.Succeeded ? r.TotalMs : null)} | {status} |\n");
         }
 
         sb.Append("\n## Summary (successful runs, nearest-rank percentiles)\n\n");
         sb.Append("| Metric | P50 (ms) | P95 (ms) |\n");
         sb.Append("|--------|----------|----------|\n");
         sb.Append(inv, $"| Time to first token | {Ms(summary.TtftP50)} | {Ms(summary.TtftP95)} |\n");
+        sb.Append(inv, $"| Prepared-answer lookup | {Ms(summary.PreparedLookupP50)} | {Ms(summary.PreparedLookupP95)} |\n");
         sb.Append(inv, $"| Total time | {Ms(summary.TotalP50)} | {Ms(summary.TotalP95)} |\n\n");
 
         var verdict = summary.Passes ? "PASS" : "FAIL";

@@ -16,7 +16,7 @@ namespace InterviewCopilot.IntegrationTests;
 public sealed class SessionRestartApiTests(ApiFactory factory) : IClassFixture<ApiFactory>
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
-        { Converters = { new JsonStringEnumConverter() } };
+    { Converters = { new JsonStringEnumConverter() } };
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private static async Task<SessionDto> CreateAsync(HttpClient client, Guid? source = null)
@@ -24,8 +24,12 @@ public sealed class SessionRestartApiTests(ApiFactory factory) : IClassFixture<A
         var response = await client.PostAsJsonAsync("/api/sessions", new
         {
             Title = source is null ? "Original" : "Editable duplicate",
-            Mode = "Conversation", AnswerLength = "Short", Framework = "Star",
-            PinnedQuestionType = "Behavioral", SessionPrompt = "Reusable context", CopyFromSessionId = source,
+            Mode = "Conversation",
+            AnswerLength = "Short",
+            Framework = "Star",
+            PinnedQuestionType = "Behavioral",
+            SessionPrompt = "Reusable context",
+            CopyFromSessionId = source,
         }, Ct);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<SessionDto>(Json, Ct))!;
