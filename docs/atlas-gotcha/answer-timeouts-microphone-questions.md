@@ -101,6 +101,22 @@ recorder, release/tag publication, and changing existing audio capture paths.
   `pnpm lint`, `pnpm typecheck`, and `pnpm test:coverage` (33 files, 348
   tests; desktop 98.19% lines, extension 100%, UI 98.16%); UI, extension,
   desktop, API Release build, and self-contained `win-x64` backend publish.
+- The Aspire.Hosting pins were updated from 13.6.4 to 13.6.5 after verifying
+  the affected-version advisories. A fresh solution build passed with zero
+  errors and one non-fatal `ASPIRE010` warning. Fresh backend runs passed:
+  unit `682/682`, integration `107/107`, and architecture `4/4`. Formatting
+  verification now passes after a formatting-only correction in
+  `SessionRestartApiTests.cs`.
+- Fresh `pnpm lint` and `pnpm typecheck` passed. Focused UI suites passed
+  `56/56`. Per-package coverage passed when run with two workers: desktop
+  `74/74` (98.19% lines), extension `21/21` (100%), and UI `255/255`
+  (97.66%). The root coverage run was unstable under local worker contention;
+  unconstrained/one-worker attempts reported worker-start timeouts and UI
+  test timeouts, while the two-worker package runs passed.
+- Backend coverage remains unverified: the CI-style `dotnet test --solution
+  ... --coverage` and a per-project coverage run both fail inside the .NET
+  `TerminalTestReporter.AssemblyRunCompleted` with `KeyNotFoundException`
+  before tests execute. Running each backend project without coverage passes.
 - The previous unsigned installer at
   `src/desktop/release/InterviewCopilot-0.1.0-windows-x64.exe` was built from
   the uncommitted worktree based on `0b5cbfa62d676a714b398d593ab4f7d63ac9f94e`;
@@ -114,11 +130,8 @@ recorder, release/tag publication, and changing existing audio capture paths.
   model-specific quality/cost results are unavailable. The new candidate has
   not been installed or launched; the old app was not running and port 5480
   was not listening at the last inspection.
-- Full solution validation remains blocked by NuGet audit errors for existing
-  Aspire 13.6.4 packages (`NU1903`/`NU1904`); the backend coverage runner also
-  exited with `KeyNotFoundException` before producing coverage. The formatter
-  reported whitespace issues in an untouched integration-test file. These
-  gates were not suppressed, and unrelated source/dependencies were not
-  changed.
+- The NuGet audit blocker and formatter failure are resolved; no audit,
+  analyzer, test, or coverage gate was disabled or weakened. The backend
+  coverage reporter exception remains outstanding.
 - No merge or branch deletion has occurred. The task branch and the unrelated
   `.claude/hooks/block-no-verify.sh` edit are preserved.

@@ -296,7 +296,14 @@ describe('LiveAssistant and AnswerCard', () => {
 
   it('ignores empty questions and renders the idle and longer/regenerate states', async () => {
     const onModify = vi.fn();
-    render(<AnswerCard answer={{ question: 'Q', text: 'A', questionType: null, version: 2, origin: null, sourceDocument: null, status: 'done', error: null }} onModify={onModify} />);
+    render(
+      <AnswerCard
+        answer={{ question: 'Q', text: 'A', questionType: null, version: 2, origin: null, sourceDocument: null, status: 'done', error: null }}
+        canCancel={false}
+        onCancel={vi.fn()}
+        onModify={onModify}
+      />,
+    );
 
     await userEvent.click(screen.getByRole('button', { name: /Longer/ }));
     await userEvent.click(screen.getByRole('button', { name: /Regenerate/ }));
