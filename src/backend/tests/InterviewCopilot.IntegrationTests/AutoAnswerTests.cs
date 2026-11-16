@@ -112,6 +112,91 @@ public sealed class AutoAnswerTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Should_BroadcastManualAnswerWithRequestIdentity()
+    {
+        _factory.Llm.Tokens = ["First", " part"];
+        var (client, token, session) = await LiveSessionAsync("manual-broadcast");
+        using var events = await ConnectAsync("events", session.Id, token);
+        var requestId = Guid.NewGuid();
+
+        var response = await client.PostAsJsonAsync($"/api/sessions/{session.Id}/answers", new
+        {
+            Question = "Why is this approach useful?",
+            RequestId = requestId,
+        }, Ct);
+
+        response.EnsureSuccessStatusCode();
+        var started = await ReadFrameAsync(events);
+        var delta = await ReadFrameAsync(events);
+        started.GetProperty("type").GetString().Should().Be("answer.started");
+        started.GetProperty("data").GetProperty("requestId").GetGuid().Should().Be(requestId);
+        delta.GetProperty("type").GetString().Should().Be("answer.delta");
+        delta.GetProperty("data").GetProperty("requestId").GetGuid().Should().Be(requestId);
+        delta.GetProperty("data").GetProperty("token").GetString().Should().Be("First");
+    }
+
+    [Fact]
+    public async Task Should_UsePreparedAnswerAndPreserveItsSourceInHistory()
+    {
+        var (client, _, session) = await LiveSessionAsync("prepared-history");
+        using var form = new MultipartFormDataContent();
+        form.Add(new StringContent("""
+            What is your research method?
+            Suggested short answer:
+            I combined interviews with quantitative analysis.
+            """), "file", "prepared.txt");
+        (await client.PostAsync($"/api/sessions/{session.Id}/documents", form, Ct)).EnsureSuccessStatusCode();
+
+        _factory.Llm.Fail = true;
+        try
+        {
+            var response = await client.PostAsJsonAsync($"/api/sessions/{session.Id}/answers", new
+            {
+                Question = "What is your research method?",
+            }, Ct);
+            response.EnsureSuccessStatusCode();
+            var stream = await response.Content.ReadAsStringAsync(Ct);
+            stream.Should().Contain("I combined interviews with quantitative analysis.")
+                .And.Contain("Prepared").And.Contain("prepared.txt");
+
+            var history = await client.GetFromJsonAsync<JsonElement>($"/api/sessions/{session.Id}/transcript", Ct);
+            var answer = history.GetProperty("answers")[0];
+            answer.GetProperty("origin").GetString().Should().Be("Prepared");
+            answer.GetProperty("sourceDocument").GetString().Should().Be("prepared.txt");
+        }
+        finally
+        {
+            _factory.Llm.Fail = false;
+        }
+    }
+
+    [Fact]
+    public async Task Should_BroadcastProviderFailureToOtherWindows()
+    {
+        var (client, token, session) = await LiveSessionAsync("manual-error");
+        using var events = await ConnectAsync("events", session.Id, token);
+        var requestId = Guid.NewGuid();
+        _factory.Llm.Fail = true;
+        try
+        {
+            var response = await client.PostAsJsonAsync($"/api/sessions/{session.Id}/answers", new
+            {
+                Question = "Why is this approach useful?",
+                RequestId = requestId,
+            }, Ct);
+            response.EnsureSuccessStatusCode();
+            (await ReadFrameAsync(events)).GetProperty("type").GetString().Should().Be("answer.started");
+            var failure = await ReadFrameAsync(events);
+            failure.GetProperty("type").GetString().Should().Be("error");
+            failure.GetProperty("data").GetProperty("requestId").GetGuid().Should().Be(requestId);
+        }
+        finally
+        {
+            _factory.Llm.Fail = false;
+        }
+    }
+
+    [Fact]
     public async Task Should_TogglePauseOverHttp_AndPublishState()
     {
         var (client, token, session) = await LiveSessionAsync("auto-toggle");

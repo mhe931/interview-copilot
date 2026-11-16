@@ -24,10 +24,11 @@ public class AnswerGeneratorTests
     private readonly InMemoryPreferences _preferences = new();
 
     private readonly InMemorySessionKeyStore _keys = new();
+    private readonly PreparedAnswerIndex _prepared = new();
 
     private AnswerGenerator Generator(params ILlmProvider[] llms) =>
         new(_store, _store, _store, new LlmProviderResolver(llms), _keys,
-            Options.Create(new LlmOptions { Model = "llama3.2:3b", Temperature = 0.2 }), new FixedClock(), _events, _preferences);
+            Options.Create(new LlmOptions { Model = "llama3.2:3b", Temperature = 0.2 }), new FixedClock(), _events, _preferences, _prepared);
 
     [Theory]
     [InlineData("qwen2.5:7b", "qwen2.5:7b")]
@@ -82,8 +83,8 @@ public class AnswerGeneratorTests
             SessionEventTypes.AnswerDone);
         _events.Published.Should().OnlyContain(e => e.SessionId == _session.Id);
         var json = _events.Published.Select(e => JsonSerializer.Serialize(e.Data, Web)).ToList();
-        json[0].Should().Be("{\"token\":\"I \",\"version\":1,\"questionType\":\"Behavioral\"}");
-        json[3].Should().Be($"{{\"version\":1,\"questionType\":\"Behavioral\",\"answerId\":\"{_store.Answers.Single().Id}\"}}");
+        json[0].Should().Be("{\"token\":\"I \",\"version\":1,\"questionType\":\"Behavioral\",\"origin\":\"Generated\",\"sourceDocument\":null,\"segmentId\":null,\"requestId\":null}");
+        json[3].Should().Be($"{{\"version\":1,\"questionType\":\"Behavioral\",\"origin\":\"Generated\",\"sourceDocument\":null,\"answerId\":\"{_store.Answers.Single().Id}\",\"segmentId\":null,\"requestId\":null}}");
     }
 
     private static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
@@ -126,6 +127,48 @@ public class AnswerGeneratorTests
             TestContext.Current.CancellationToken);
 
         header.Version.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task Should_StreamPreparedAnswerWithoutCallingProvider_When_ExactQuestionMatches()
+    {
+        _session.AttachDocument("prepared.txt", """
+            What is your research method?
+            Suggested short answer:
+            I combined interviews with quantitative analysis.
+            """, FixedClock.Default);
+        var llm = new FakeLlm("generated");
+        var (header, tokens) = await Generator(llm).GenerateAsync(
+            new AnswerRequest(_session.Id, "What is your research method?"), TestContext.Current.CancellationToken);
+
+        var streamed = new List<string>();
+        await foreach (var token in tokens) streamed.Add(token);
+
+        string.Concat(streamed).Should().Be("I combined interviews with quantitative analysis.");
+        llm.LastRequest.Should().BeNull();
+        header.Origin.Should().Be(AnswerOrigin.Prepared);
+        header.SourceDocument.Should().Be("prepared.txt");
+        _store.Answers.Single().Origin.Should().Be(AnswerOrigin.Prepared);
+        _store.Answers.Single().SourceDocument.Should().Be("prepared.txt");
+    }
+
+    [Fact]
+    public async Task Should_Generate_When_PreparedAnswerIsModified()
+    {
+        _session.AttachDocument("prepared.txt", """
+            What is your research method?
+            Answer:
+            I combined interviews with quantitative analysis.
+            """, FixedClock.Default);
+        var llm = new FakeLlm("longer");
+        var (header, tokens) = await Generator(llm).GenerateAsync(
+            new AnswerRequest(_session.Id, "What is your research method?", AnswerModifier.Longer, "earlier"),
+            TestContext.Current.CancellationToken);
+
+        await foreach (var token in tokens) _ = token;
+
+        llm.LastRequest.Should().NotBeNull();
+        header.Origin.Should().Be(AnswerOrigin.Generated);
     }
 
     [Fact]

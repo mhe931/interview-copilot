@@ -97,6 +97,16 @@ public class PromptTests
     }
 
     [Fact]
+    public void Should_UseStarOnlyForRelevantPastExamples_When_QuestionIsAcademic()
+    {
+        var system = AnswerPromptBuilder.Build(Input(NewSession(), type: QuestionType.TechnicalKnowledge))[0].Content;
+
+        system.Should().Contain("STAR")
+            .And.Contain("only")
+            .And.Contain("otherwise answer directly");
+    }
+
+    [Fact]
     public void Should_PreferRelevantChunks_WithinBudget()
     {
         var session = Session.Create(Guid.NewGuid(), "Docs", SessionMode.LiveInterview, Now);

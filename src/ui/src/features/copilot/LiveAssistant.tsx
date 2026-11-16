@@ -24,7 +24,7 @@ export function LiveAssistant({
   onAutoAnswerChanged?: (enabled: boolean) => void;
 }) {
   const { api } = useApp();
-  const { answer, ask, beginAuto, applyEvent } = useAnswerStream(sessionId);
+  const { answer, ask, beginAuto, beginExternal, applyEvent } = useAnswerStream(sessionId);
   const [question, setQuestion] = useState('');
   const [autoAnswer, setAutoAnswer] = useState(initialAutoAnswer);
   const [pausedQuestion, setPausedQuestion] = useState<string | null>(null);
@@ -32,23 +32,26 @@ export function LiveAssistant({
 
   const onEvent = useCallback(
     (event: SessionEvent) => {
-      const data = (event.data ?? {}) as { text?: string; enabled?: boolean };
+      const data = (event.data ?? {}) as { text?: string; enabled?: boolean; segmentId?: string; question?: string; requestId?: string };
       if (event.type === 'autoanswer.state') {
         const enabled = Boolean(data.enabled);
         setAutoAnswer(enabled);
         onAutoAnswerChanged?.(enabled);
-      } else if (event.type === 'question.detected' && data.text) {
+      } else if (event.type === 'question.detected' && data.text && data.segmentId) {
         if (autoAnswer) {
           setPausedQuestion(null);
-          beginAuto(data.text);
+          beginAuto(data.text, data.segmentId);
         } else {
           setPausedQuestion(data.text);
         }
+      } else if (event.type === 'answer.started' && data.question && data.requestId) {
+        setPausedQuestion(null);
+        beginExternal(data.question, data.requestId);
       } else {
         applyEvent(event);
       }
     },
-    [autoAnswer, beginAuto, applyEvent, onAutoAnswerChanged],
+    [autoAnswer, beginAuto, beginExternal, applyEvent, onAutoAnswerChanged],
   );
   useSessionEvents(sessionId, onEvent);
 

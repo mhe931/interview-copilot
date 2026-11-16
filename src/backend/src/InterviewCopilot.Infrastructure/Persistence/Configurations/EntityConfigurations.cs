@@ -62,6 +62,7 @@ internal sealed class SuggestedAnswerConfiguration : IEntityTypeConfiguration<Su
     {
         builder.HasKey(a => a.Id);
         builder.Property(a => a.Id).ValueGeneratedNever(); // ids are created in the domain
+        builder.Property(a => a.SourceDocument).HasMaxLength(SessionLimits.MaxFileNameLength);
         builder.HasIndex(a => new { a.SessionId, a.CreatedAt });
         builder.HasOne<Session>().WithMany().HasForeignKey(a => a.SessionId).OnDelete(DeleteBehavior.Cascade);
     }

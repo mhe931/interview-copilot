@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using InterviewCopilot.Api.Infrastructure;
 using InterviewCopilot.Application.Copilot;
+using InterviewCopilot.Application.Events;
 using InterviewCopilot.Application.Providers;
 using InterviewCopilot.Application.Sessions;
 using InterviewCopilot.Domain.Enums;
@@ -16,7 +17,8 @@ public sealed record AnswerQuestionRequest(
     string Question,
     AnswerModifier Modifier = AnswerModifier.None,
     string? PreviousAnswer = null,
-    int PreviousVersion = 0);
+    int PreviousVersion = 0,
+    Guid? RequestId = null);
 
 internal static class CopilotEndpoints
 {
@@ -38,13 +40,18 @@ internal static class CopilotEndpoints
                 ClaimsPrincipal user,
                 SessionService sessions,
                 AnswerGenerator generator,
+                AutoAnswerService autoAnswers,
+                ISessionEventPublisher events,
                 CancellationToken ct) =>
             {
                 await sessions.GetAsync(user.UserId(), sessionId, ct); // ownership check, 404 otherwise
+                await autoAnswers.CancelAsync(sessionId);
+                var requestId = request.RequestId ?? Guid.NewGuid();
                 var (header, tokens) = await generator.GenerateAsync(
-                    new AnswerRequest(sessionId, request.Question, request.Modifier, request.PreviousAnswer, request.PreviousVersion, apiKey),
+                    new AnswerRequest(sessionId, request.Question, request.Modifier, request.PreviousAnswer, request.PreviousVersion, apiKey, RequestId: requestId),
                     ct);
-                return TypedResults.ServerSentEvents(ToEvents(header, tokens, ct));
+                events.Publish(sessionId, SessionEventTypes.AnswerStarted, new { requestId, question = request.Question });
+                return TypedResults.ServerSentEvents(ToEvents(header, tokens, sessionId, requestId, events, ct));
             })
             .WithTags("Copilot")
             .RequireAuthorization(Policies.ExtensionScope);
@@ -53,14 +60,17 @@ internal static class CopilotEndpoints
     private static async IAsyncEnumerable<SseItem<string>> ToEvents(
         AnswerHeader header,
         IAsyncEnumerable<string> tokens,
+        Guid sessionId,
+        Guid requestId,
+        ISessionEventPublisher events,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        yield return new SseItem<string>(JsonSerializer.Serialize(header, JsonOptions), "meta");
-
         var enumerator = tokens.GetAsyncEnumerator(cancellationToken);
         string? error = null;
+        var completed = false;
         try
         {
+            yield return new SseItem<string>(JsonSerializer.Serialize(header, JsonOptions), "meta");
             while (true)
             {
                 string token;
@@ -68,6 +78,7 @@ internal static class CopilotEndpoints
                 {
                     if (!await enumerator.MoveNextAsync())
                     {
+                        completed = true;
                         break;
                     }
 
@@ -76,6 +87,8 @@ internal static class CopilotEndpoints
                 catch (LlmUnavailableException ex)
                 {
                     error = ex.Message;
+                    events.Publish(sessionId, SessionEventTypes.Error, new { requestId, message = error });
+                    completed = true;
                     break;
                 }
 
@@ -84,7 +97,17 @@ internal static class CopilotEndpoints
         }
         finally
         {
-            await enumerator.DisposeAsync();
+            try
+            {
+                await enumerator.DisposeAsync();
+            }
+            finally
+            {
+                if (!completed)
+                {
+                    events.Publish(sessionId, SessionEventTypes.Error, new { requestId, message = "The answer was interrupted." });
+                }
+            }
         }
 
         yield return error is null

@@ -43,6 +43,7 @@ export interface AskInput {
   modifier?: AnswerModifier;
   previousAnswer?: string;
   previousVersion?: number;
+  requestId?: string;
   /** BYOK key from the OS keychain (desktop) — sent per request, never stored by the backend. */
   llmApiKey?: string;
 }
@@ -261,6 +262,7 @@ export class ApiClient {
         modifier: input.modifier ?? 'None',
         previousAnswer: input.previousAnswer ?? null,
         previousVersion: input.previousVersion ?? 0,
+        requestId: input.requestId ?? null,
       }),
     });
 

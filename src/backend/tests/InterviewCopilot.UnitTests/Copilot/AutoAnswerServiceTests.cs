@@ -79,6 +79,11 @@ public sealed class AutoAnswerServiceTests : IDisposable
             SessionEventTypes.AnswerDone);
         var detected = JsonSerializer.Serialize(_events.Published[0].Data);
         detected.Should().Contain(segment.Id.ToString()).And.Contain("Tell me about a time you led a team.");
+        foreach (var answerEvent in _events.Published.Skip(1))
+        {
+            JsonSerializer.Serialize(answerEvent.Data).Should().Contain(segment.Id.ToString());
+        }
+
         _store.Answers.Should().ContainSingle().Which.Question.Should().Be("Tell me about a time you led a team.");
     }
 

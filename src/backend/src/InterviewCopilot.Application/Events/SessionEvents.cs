@@ -5,6 +5,7 @@ public static class SessionEventTypes
 {
     public const string TranscriptSegment = "transcript.segment";
     public const string QuestionDetected = "question.detected";
+    public const string AnswerStarted = "answer.started";
     public const string AnswerDelta = "answer.delta";
     public const string AnswerDone = "answer.done";
     public const string Error = "error";

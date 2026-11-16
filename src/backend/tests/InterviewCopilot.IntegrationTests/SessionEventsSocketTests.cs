@@ -64,20 +64,23 @@ public sealed class SessionEventsSocketTests : IClassFixture<ApiFactory>
         _factory.Llm.Tokens = ["One ", "two ", "three."];
         using var first = await ConnectAsync(session.Id, token);
         using var second = await ConnectAsync(session.Id, token);
+        var requestId = Guid.NewGuid();
 
-        var response = await client.PostAsJsonAsync($"/api/sessions/{session.Id}/answers", new { Question = "Tell me about a time you led a team." }, Ct);
+        var response = await client.PostAsJsonAsync($"/api/sessions/{session.Id}/answers", new { Question = "Tell me about a time you led a team.", RequestId = requestId }, Ct);
         response.EnsureSuccessStatusCode();
         await response.Content.ReadAsStringAsync(Ct);
 
         foreach (var socket in new[] { first, second })
         {
             var frames = await ReadUntilDoneAsync(socket);
-            frames.Select(f => f.GetProperty("id").GetInt64()).Should().Equal(1, 2, 3, 4);
-            frames.Take(3).Select(f => f.GetProperty("type").GetString()).Should().OnlyContain(t => t == "answer.delta");
-            frames.Take(3).Select(f => f.GetProperty("data").GetProperty("token").GetString()).Should().Equal("One ", "two ", "three.");
-            frames[0].GetProperty("data").GetProperty("version").GetInt32().Should().Be(1);
-            frames[0].GetProperty("data").GetProperty("questionType").GetString().Should().Be("Behavioral");
-            frames[3].GetProperty("data").GetProperty("answerId").GetGuid().Should().NotBeEmpty();
+            frames.Select(f => f.GetProperty("id").GetInt64()).Should().Equal(1, 2, 3, 4, 5);
+            frames[0].GetProperty("type").GetString().Should().Be("answer.started");
+            frames.Should().OnlyContain(f => f.GetProperty("data").GetProperty("requestId").GetGuid() == requestId);
+            frames.Skip(1).Take(3).Select(f => f.GetProperty("type").GetString()).Should().OnlyContain(t => t == "answer.delta");
+            frames.Skip(1).Take(3).Select(f => f.GetProperty("data").GetProperty("token").GetString()).Should().Equal("One ", "two ", "three.");
+            frames[1].GetProperty("data").GetProperty("version").GetInt32().Should().Be(1);
+            frames[1].GetProperty("data").GetProperty("questionType").GetString().Should().Be("Behavioral");
+            frames[4].GetProperty("data").GetProperty("answerId").GetGuid().Should().NotBeEmpty();
         }
 
         await first.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", Ct);

@@ -5,9 +5,10 @@ using InterviewCopilot.Application.Audio;
 
 namespace InterviewCopilot.Api.Endpoints;
 
-internal static class AudioEndpoints
+internal static partial class AudioEndpoints
 {
     public const string AudioPathPrefix = "/ws/";
+    private static readonly TimeSpan CloseHandshakeTimeout = TimeSpan.FromSeconds(1);
 
     public static void MapAudioEndpoints(this IEndpointRouteBuilder app)
     {
@@ -17,6 +18,7 @@ internal static class AudioEndpoints
                 HttpContext context,
                 ClaimsPrincipal user,
                 AudioIngestService ingest,
+                ILoggerFactory loggerFactory,
                 CancellationToken ct) =>
             {
                 if (!context.WebSockets.IsWebSocketRequest)
@@ -26,15 +28,37 @@ internal static class AudioEndpoints
 
                 using var stream = await ingest.OpenStreamAsync(user.UserId(), sessionId, ct); // 404 / 409 before the upgrade
                 using var socket = await context.WebSockets.AcceptWebSocketAsync();
-                using var receiving = CancellationTokenSource.CreateLinkedTokenSource(ct, stream.Stopping);
+                using var receiving = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                using var closeGate = new SemaphoreSlim(1, 1);
                 var malformed = false;
+                var receive = ReceiveAsync(socket, sessionId, ingest, closeGate, receiving.Token);
                 try
                 {
-                    malformed = await ReceiveAsync(socket, sessionId, ingest, receiving.Token);
+                    var stopping = Task.Delay(Timeout.InfiniteTimeSpan, stream.Stopping);
+                    if (await Task.WhenAny(receive, stopping) == stopping && !receive.IsCompleted)
+                    {
+                        receiving.CancelAfter(CloseHandshakeTimeout);
+                        await CloseOutputAsync(socket, closeGate, receiving.Token);
+                    }
+
+                    malformed = await receive;
                 }
                 catch (OperationCanceledException) when (stream.Stopping.IsCancellationRequested)
                 {
+                    LogAudioDrainTimeout(loggerFactory.CreateLogger(nameof(AudioEndpoints)), sessionId);
                     socket.Abort();
+                    try
+                    {
+                        await receive;
+                    }
+                    catch (OperationCanceledException) when (receiving.IsCancellationRequested)
+                    {
+                        // The timeout cancelled the receive.
+                    }
+                    catch (WebSocketException)
+                    {
+                        // Aborting the socket also ends an outstanding receive.
+                    }
                 }
                 finally
                 {
@@ -69,11 +93,11 @@ internal static class AudioEndpoints
     }
 
     /// <summary>Reads frames until the stream ends. Returns true when it ended on a malformed frame the caller must close for.</summary>
-    private static async Task<bool> ReceiveAsync(WebSocket socket, Guid sessionId, AudioIngestService ingest, CancellationToken ct)
+    private static async Task<bool> ReceiveAsync(WebSocket socket, Guid sessionId, AudioIngestService ingest, SemaphoreSlim closeGate, CancellationToken ct)
     {
         // One byte more than the limit, so an oversized message is detectable.
         var buffer = new byte[AudioFrameParser.MaxMessageBytes + 1];
-        while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
+        while (socket.State is WebSocketState.Open or WebSocketState.CloseSent && !ct.IsCancellationRequested)
         {
             var length = 0;
             ValueWebSocketReceiveResult result;
@@ -82,7 +106,7 @@ internal static class AudioEndpoints
                 result = await socket.ReceiveAsync(buffer.AsMemory(length), ct);
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
-                    await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, ct);
+                    await CloseOutputAsync(socket, closeGate, ct);
                     return false;
                 }
 
@@ -101,6 +125,26 @@ internal static class AudioEndpoints
             await ingest.IngestAsync(sessionId, frame with { Pcm16 = frame.Pcm16.ToArray() }, ct);
         }
 
+        ct.ThrowIfCancellationRequested();
         return false;
     }
+
+    private static async Task CloseOutputAsync(WebSocket socket, SemaphoreSlim closeGate, CancellationToken ct)
+    {
+        await closeGate.WaitAsync(ct);
+        try
+        {
+            if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+            {
+                await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, ct);
+            }
+        }
+        finally
+        {
+            closeGate.Release();
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Audio stream for session {SessionId} did not close in time.")]
+    private static partial void LogAudioDrainTimeout(ILogger logger, Guid sessionId);
 }

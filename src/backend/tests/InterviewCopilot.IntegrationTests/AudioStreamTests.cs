@@ -214,6 +214,26 @@ public sealed class AudioStreamTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Should_DrainSentAudio_When_ClientCooperatesWithSessionEnd()
+    {
+        var (client, token, session) = await LiveSessionAsync("audio-graceful-end");
+        using var socket = await ConnectAsync(session.Id, token);
+        for (var i = 0; i < 5; i++)
+        {
+            await socket.SendAsync(LoudFrame(1), WebSocketMessageType.Binary, true, Ct);
+        }
+
+        var end = client.PostAsync($"/api/sessions/{session.Id}/end", null, Ct);
+        var close = await socket.ReceiveAsync(new byte[64], Ct).WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        close.MessageType.Should().Be(WebSocketMessageType.Close);
+        await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, Ct);
+        (await end).EnsureSuccessStatusCode();
+
+        var transcript = await WaitForEntriesAsync(client, session.Id, 1);
+        transcript.Entries.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task Should_RejectSecondStream_And_ConcurrentStart()
     {
         var (client, token, session) = await LiveSessionAsync("audio-exclusive");

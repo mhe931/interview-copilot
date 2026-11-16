@@ -8,7 +8,7 @@ namespace InterviewCopilot.Application.Transcripts;
 
 public sealed record TranscriptEntryDto(long AtMs, Speaker Speaker, string Text);
 
-public sealed record AnswerEntryDto(DateTimeOffset CreatedAt, string Question, QuestionType QuestionType, int Version, string Text);
+public sealed record AnswerEntryDto(DateTimeOffset CreatedAt, string Question, QuestionType QuestionType, int Version, string Text, AnswerOrigin Origin = AnswerOrigin.Generated, string? SourceDocument = null);
 
 public sealed record TranscriptDto(
     Guid SessionId,
@@ -72,6 +72,6 @@ public sealed class TranscriptService(
             session.Mode,
             session.CreatedAt,
             [.. segments.OrderBy(s => s.StartMs).Select(s => new TranscriptEntryDto(s.StartMs, s.Speaker, s.Text))],
-            [.. answers.OrderBy(a => a.CreatedAt).Select(a => new AnswerEntryDto(a.CreatedAt, a.Question, a.QuestionType, a.Version, a.Text))],
+            [.. answers.OrderBy(a => a.CreatedAt).Select(a => new AnswerEntryDto(a.CreatedAt, a.Question, a.QuestionType, a.Version, a.Text, a.Origin, a.SourceDocument))],
             [.. attempts.OrderBy(a => a.CreatedAt).Select(PracticeAttemptDto.From)]);
 }

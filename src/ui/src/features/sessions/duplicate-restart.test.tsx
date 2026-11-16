@@ -107,8 +107,8 @@ describe('duplicate and restart', () => {
     const old = FakeWebSocket.last;
     act(() => {
       old.open();
-      old.emit({ type: 'question.detected', data: { text: 'Old question' } });
-      old.emit({ type: 'answer.delta', data: { token: 'Old answer' } });
+      old.emit({ type: 'question.detected', data: { segmentId: 'old-segment', text: 'Old question' } });
+      old.emit({ type: 'answer.delta', data: { segmentId: 'old-segment', token: 'Old answer' } });
     });
     expect(screen.getByText('Old answer')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Start again' }));

@@ -76,7 +76,8 @@ public sealed class SessionService(
     SessionRuntime? runtime = null,
     IEnumerable<IAudioFrameSink>? audioSinks = null,
     AutoAnswerService? autoAnswers = null,
-    PracticeAnswerCollector? practiceAnswers = null)
+    PracticeAnswerCollector? practiceAnswers = null,
+    PreparedAnswerIndex? preparedAnswers = null)
 {
     public const int MaxApiKeyLength = 512;
 
@@ -130,6 +131,7 @@ public sealed class SessionService(
         var session = await LoadOwnedAsync(ownerId, sessionId, cancellationToken);
         session.ConfigureAnswers(command.AnswerLength, command.Framework, command.PinnedQuestionType, command.SessionPrompt);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        preparedAnswers?.Prepare(session.Id, session.Documents);
         return SessionDto.From(session);
     }
 
@@ -148,6 +150,7 @@ public sealed class SessionService(
             stats.Reset(session.Id);
         }
 
+        preparedAnswers?.Prepare(session.Id, session.Documents);
         session.Start(clock.GetUtcNow());
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return SessionDto.From(session);
@@ -172,6 +175,7 @@ public sealed class SessionService(
 
         sessions.Remove(session);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        preparedAnswers?.Remove(sessionId);
     }
 
     public async Task<SessionDto> EndAsync(Guid ownerId, Guid sessionId, CancellationToken cancellationToken)
@@ -181,6 +185,7 @@ public sealed class SessionService(
         session.End(clock.GetUtcNow());
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await SettleRuntimeAsync(session.Id);
+        preparedAnswers?.Remove(sessionId);
         return SessionDto.From(session);
     }
 
