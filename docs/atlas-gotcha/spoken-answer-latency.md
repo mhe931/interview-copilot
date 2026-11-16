@@ -97,6 +97,9 @@ cost, privacy, or capture behavior requires explicit user choice.
 - Answer events carry question or request identity so both windows can stream
   updates and discard stale events. STAR guidance is conditional on a relevant
   past example.
+- On session end, the audio socket now requests a normal close and allows up to
+  one second to drain already-sent frames. A stalled close is logged and
+  aborted; audio not yet sent by a client cannot be recovered.
 - Synthetic indexing and retrieval timings are not end-to-end latency evidence.
   Comparable installed-app, microphone and meeting-audio measurements remain
   necessary before claiming a real-world speedup.
