@@ -117,6 +117,21 @@ recorder, release/tag publication, and changing existing audio capture paths.
   ... --coverage` and a per-project coverage run both fail inside the .NET
   `TerminalTestReporter.AssemblyRunCompleted` with `KeyNotFoundException`
   before tests execute. Running each backend project without coverage passes.
+- Current official [Gemini 3.5 Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite),
+  [Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash),
+  [thinking](https://ai.google.dev/gemini-api/docs/thinking), and
+  [GenerateContent API](https://ai.google.dev/api/generate-content/generate-content)
+  documentation confirms the two model IDs and the `thinkingConfig.thinkingLevel`
+  field. Gemini 3.5 Flash-Lite supports `MINIMAL` and is positioned as the
+  faster/lower-cost option; Gemini 3.8 Flash supports `LOW`, `MEDIUM`, and
+  `HIGH`, but not `MINIMAL`. Published standard rates are $0.30/$2.50 per
+  million input/output tokens for 3.5 Flash-Lite; 3.8 Flash is introductory
+  at $0.75/$3.75 through 2026-12-31, then $1.50/$7.50 from 2027-01-01.
+  The provider's model-specific settings match these documented levels.
+  No live model access, latency, quality, or cost benchmark was possible:
+  no app `keys.json` or `settings.json` was present in the current Electron
+  userData directory, so no configured Gemini key/model could be established.
+  No key or user database contents were read or sent.
 - The previous unsigned installer at
   `src/desktop/release/InterviewCopilot-0.1.0-windows-x64.exe` was built from
   the uncommitted worktree based on `0b5cbfa62d676a714b398d593ab4f7d63ac9f94e`;
@@ -125,11 +140,15 @@ recorder, release/tag publication, and changing existing audio capture paths.
   `%LOCALAPPDATA%\Programs\InterviewCopilot\InterviewCopilot.exe`, with its
   Start Menu shortcut intact. The prior build and user data were backed up at
   `%LOCALAPPDATA%\InterviewCopilot\backups\issue6-preinstall-20261116-125345`.
-- No Gemini model-access check, live benchmark, physical microphone,
-  Zoom/system-audio, echo, or restart check was performed. Latency samples and
-  model-specific quality/cost results are unavailable. The new candidate has
-  not been installed or launched; the old app was not running and port 5480
-  was not listening at the last inspection.
+- No physical microphone, Zoom/system-audio, echo, or restart check was
+  performed. Latency samples and measured quality/cost results are unavailable.
+- The installer was built from commit `286c0a594ba380951b8efd0dae8d47ed24940d0c`,
+  and a fresh backup of the existing install, Electron userData, and shortcut
+  was made. Installation and launch remain blocked: the desktop-control policy
+  requires separate confirmation before installing or opening new software,
+  and the user was unavailable to provide it. The installer was canceled
+  without changing the existing per-user install; the previously installed
+  build remains intact.
 - The NuGet audit blocker and formatter failure are resolved; no audit,
   analyzer, test, or coverage gate was disabled or weakened. The backend
   coverage reporter exception remains outstanding.
