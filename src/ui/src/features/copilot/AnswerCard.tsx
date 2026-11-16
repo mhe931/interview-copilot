@@ -1,10 +1,20 @@
-import { RefreshCw, Minimize2, Maximize2 } from 'lucide-react';
+import { RefreshCw, Minimize2, Maximize2, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { QUESTION_TYPE_LABELS, type AnswerModifier } from '@/types/api';
 import type { AnswerState } from './useAnswerStream';
 
 /** Shows the streaming answer with the Regenerate / Shorter / Longer buttons (FR-09, FR-10). */
-export function AnswerCard({ answer, onModify }: { answer: AnswerState; onModify: (modifier: AnswerModifier) => void }) {
+export function AnswerCard({
+  answer,
+  canCancel,
+  onCancel,
+  onModify,
+}: {
+  answer: AnswerState;
+  canCancel: boolean;
+  onCancel: () => void;
+  onModify: (modifier: AnswerModifier) => void;
+}) {
   if (answer.status === 'idle') {
     return <p className="text-sm text-muted-foreground">Suggested answers appear here when a question is asked.</p>;
   }
@@ -31,7 +41,15 @@ export function AnswerCard({ answer, onModify }: { answer: AnswerState; onModify
           {answer.error}
         </p>
       )}
+      {answer.status === 'cancelled' && (
+        <p role="status" className="text-sm text-muted-foreground">Answer stopped.</p>
+      )}
       <div className="flex flex-wrap gap-2">
+        {busy && canCancel && (
+          <Button size="sm" variant="destructive" onClick={onCancel}>
+            <Square className="size-3.5" /> Stop answer
+          </Button>
+        )}
         <Button size="sm" variant="outline" disabled={busy} onClick={() => onModify('Regenerate')}>
           <RefreshCw className="size-3.5" /> Regenerate
         </Button>

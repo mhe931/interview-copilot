@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using InterviewCopilot.Application.Audio;
 using InterviewCopilot.Application.Common.Interfaces;
@@ -23,16 +24,17 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
     /// <summary>Sent to clients when an automatic answer fails for a reason that isn't a user-facing provider error.</summary>
     public const string GenericFailureMessage = "The automatic answer couldn't be generated.";
 
-    /// <summary>Sent to clients when an automatic answer runs past the time limit.</summary>
-    public const string TimeoutMessage = "The answer took too long. Try a smaller model in Settings.";
+    private static readonly TimeSpan DuplicateQuestionWindow = TimeSpan.FromSeconds(8);
 
     private readonly IServiceScopeFactory _scopes;
     private readonly ISessionEventPublisher _events;
     private readonly ILogger<AutoAnswerService> _logger;
+    private readonly TimeProvider _clock;
     private readonly TimeSpan _answerTimeout;
     private readonly Lock _gate = new();
     private readonly Dictionary<Guid, InFlight> _inFlight = [];
     private readonly Dictionary<Guid, HashSet<InFlight>> _running = [];
+    private readonly Dictionary<Guid, RecentQuestion> _recentQuestions = [];
 
     /// <summary>Creates the service.</summary>
     /// <param name="scopes">Creates a scope per answer for the scoped repositories and generator.</param>
@@ -43,7 +45,8 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
         IServiceScopeFactory scopes,
         ISessionEventPublisher events,
         ILogger<AutoAnswerService> logger,
-        TimeSpan? answerTimeout = null)
+        TimeSpan? answerTimeout = null,
+        TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(scopes);
         ArgumentNullException.ThrowIfNull(events);
@@ -52,13 +55,22 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
         _events = events;
         _logger = logger;
         _answerTimeout = answerTimeout ?? DefaultAnswerTimeout;
+        _clock = clock ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
     public async ValueTask OnSegmentAsync(TranscriptSegment segment, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(segment);
-        if (segment.Speaker != Speaker.Interviewer || !QuestionDetector.IsQuestion(segment.Text))
+        if (segment.Speaker != Speaker.Interviewer)
+        {
+            return;
+        }
+
+        var detectionStartedAt = Stopwatch.GetTimestamp();
+        var isQuestion = QuestionDetector.IsQuestion(segment.Text);
+        LogQuestionDetection(segment.SessionId, ElapsedMilliseconds(detectionStartedAt), isQuestion);
+        if (!isQuestion)
         {
             return;
         }
@@ -74,6 +86,11 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
             }
 
             autoAnswer = session.AutoAnswer;
+        }
+
+        if (!TryRememberQuestion(segment.SessionId, segment.Text))
+        {
+            return;
         }
 
         // Publish first: clients reset their answer card on question.detected, so it must precede the answer's deltas.
@@ -105,10 +122,15 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
         }
     }
 
-    public async Task CancelAsync(Guid sessionId)
+    public async Task CancelAsync(Guid sessionId, string? suppressDuplicateQuestion = null)
     {
         lock (_gate)
         {
+            if (!string.IsNullOrWhiteSpace(suppressDuplicateQuestion))
+            {
+                RememberQuestionLocked(sessionId, suppressDuplicateQuestion);
+            }
+
             if (_running.TryGetValue(sessionId, out var running))
             {
                 foreach (var entry in running)
@@ -121,6 +143,25 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
         await WhenIdleAsync(sessionId);
     }
 
+    public async Task CancelCurrentAsync(Guid sessionId, Guid segmentId)
+    {
+        Task? currentTask = null;
+        lock (_gate)
+        {
+            if (_inFlight.TryGetValue(sessionId, out var current) && current.SegmentId == segmentId)
+            {
+                current.Cancel();
+                currentTask = current.Task;
+            }
+        }
+
+        if (currentTask is not null)
+        {
+            _events.Publish(sessionId, SessionEventTypes.AnswerCancelled, new { segmentId });
+            await currentTask;
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
@@ -130,14 +171,24 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
             {
                 entry.Cancel();
             }
+
+            _recentQuestions.Clear();
         }
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Automatic answer failed for session {SessionId} ({ErrorType}).")]
     private partial void LogAnswerFailed(Guid sessionId, string errorType);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Automatic answer for session {SessionId} timed out.")]
-    private partial void LogAnswerTimedOut(Guid sessionId);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Automatic answer for session {SessionId} timed out during {Phase}.")]
+    private partial void LogAnswerTimedOut(Guid sessionId, AnswerTimeoutPhase phase);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Interviewer question detection for session {SessionId} took {ElapsedMs} ms; matched={Matched}.")]
+    private partial void LogQuestionDetection(Guid sessionId, double elapsedMs, bool matched);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Automatic answer for session {SessionId} was cancelled by a newer request or session stop.")]
+    private partial void LogAnswerCancelled(Guid sessionId);
+
+    private static double ElapsedMilliseconds(long startedAt) => Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
 
     /// <summary>Stops the session's running answer and, when a question is given, starts answering it.</summary>
     private void Replace(Guid sessionId, Guid segmentId, string? question)
@@ -154,7 +205,7 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
                 return;
             }
 
-            var entry = new InFlight(_answerTimeout);
+            var entry = new InFlight(segmentId);
             entry.Task = Task.Run(() => RunAsync(sessionId, segmentId, question, entry), CancellationToken.None);
             _inFlight[sessionId] = entry;
             if (!_running.TryGetValue(sessionId, out var running))
@@ -174,19 +225,27 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
         {
             using var scope = _scopes.CreateScope();
             var generator = scope.ServiceProvider.GetRequiredService<AnswerGenerator>();
-            var (_, tokens) = await generator.GenerateAsync(new AnswerRequest(sessionId, question, SegmentId: segmentId), self.Token);
+            var (_, tokens) = await generator.GenerateAsync(
+                new AnswerRequest(sessionId, question, SegmentId: segmentId, TotalTimeout: _answerTimeout),
+                self.Token);
             await foreach (var token in tokens.WithCancellation(self.Token))
             {
                 _ = token; // Consuming the stream is what publishes answer.delta / answer.done.
             }
         }
-        catch (OperationCanceledException)
+        catch (AnswerStreamTimeoutException ex)
         {
-            if (!self.CancelledByCaller)
-            {
-                LogAnswerTimedOut(sessionId);
-                _events.Publish(sessionId, SessionEventTypes.Error, new { message = TimeoutMessage, segmentId });
-            }
+            LogAnswerTimedOut(sessionId, ex.Phase);
+            _events.Publish(sessionId, SessionEventTypes.Error, new { message = ex.Message, segmentId });
+        }
+        catch (OperationCanceledException) when (self.CancelledByCaller)
+        {
+            LogAnswerCancelled(sessionId);
+        }
+        catch (OperationCanceledException ex)
+        {
+            LogAnswerFailed(sessionId, ex.GetType().Name);
+            _events.Publish(sessionId, SessionEventTypes.Error, new { message = GenericFailureMessage, segmentId });
         }
         catch (LlmUnavailableException ex)
         {
@@ -216,9 +275,51 @@ public sealed partial class AutoAnswerService : ITranscriptSegmentListener, IDis
         }
     }
 
-    private sealed class InFlight(TimeSpan timeout) : IDisposable
+    private bool TryRememberQuestion(Guid sessionId, string question)
     {
-        private readonly CancellationTokenSource _source = new(timeout);
+        lock (_gate)
+        {
+            return RememberQuestionLocked(sessionId, question);
+        }
+    }
+
+    private bool RememberQuestionLocked(Guid sessionId, string question)
+    {
+        var now = _clock.GetUtcNow();
+        foreach (var expired in _recentQuestions.Where(entry => entry.Value.ExpiresAt <= now).Select(entry => entry.Key).ToArray())
+        {
+            _recentQuestions.Remove(expired);
+        }
+
+        var normalized = NormalizeQuestion(question);
+        if (normalized.Length == 0)
+        {
+            return true;
+        }
+
+        if (_recentQuestions.TryGetValue(sessionId, out var recent)
+            && recent.ExpiresAt > now
+            && recent.Normalized == normalized)
+        {
+            return false;
+        }
+
+        _recentQuestions[sessionId] = new RecentQuestion(normalized, now + DuplicateQuestionWindow);
+        return true;
+    }
+
+    private static string NormalizeQuestion(string question) =>
+        string.Concat(question.Where(char.IsLetterOrDigit)).ToUpperInvariant();
+
+    private sealed record RecentQuestion(string Normalized, DateTimeOffset ExpiresAt);
+
+    private sealed class InFlight : IDisposable
+    {
+        private readonly CancellationTokenSource _source = new();
+
+        public InFlight(Guid segmentId) => SegmentId = segmentId;
+
+        public Guid SegmentId { get; }
 
         public CancellationToken Token => _source.Token;
 

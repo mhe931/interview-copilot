@@ -8,6 +8,7 @@ public static class SessionEventTypes
     public const string AnswerStarted = "answer.started";
     public const string AnswerDelta = "answer.delta";
     public const string AnswerDone = "answer.done";
+    public const string AnswerCancelled = "answer.cancelled";
     public const string Error = "error";
     public const string AutoAnswerState = "autoanswer.state";
 }

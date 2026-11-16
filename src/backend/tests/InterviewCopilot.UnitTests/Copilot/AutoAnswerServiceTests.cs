@@ -42,6 +42,7 @@ public sealed class AutoAnswerServiceTests : IDisposable
     private ServiceProvider Build()
     {
         var services = new ServiceCollection();
+        services.AddLogging();
         services.AddSingleton<ISessionRepository>(_store);
         services.AddSingleton<ITranscriptRepository>(_store);
         services.AddSingleton<IUnitOfWork>(_store);
@@ -85,6 +86,31 @@ public sealed class AutoAnswerServiceTests : IDisposable
         }
 
         _store.Answers.Should().ContainSingle().Which.Question.Should().Be("Tell me about a time you led a team.");
+    }
+
+    [Fact]
+    public async Task Should_SuppressDuplicateQuestionWithinWindow()
+    {
+        var question = "Tell me about a time you led a team.";
+        await _service.OnSegmentAsync(Segment(Speaker.Interviewer, question), Ct);
+        await _service.WhenIdleAsync(_session.Id);
+        await _service.OnSegmentAsync(Segment(Speaker.Interviewer, question), Ct);
+        await _service.WhenIdleAsync(_session.Id);
+
+        Types.Count(type => type == SessionEventTypes.QuestionDetected).Should().Be(1);
+        Types.Count(type => type == SessionEventTypes.AnswerDone).Should().Be(1);
+        _store.Answers.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Should_SuppressMeetingAudioEchoAfterManualQuestion()
+    {
+        const string question = "Tell me about a time you led a team.";
+        await _service.CancelAsync(_session.Id, question);
+        await _service.OnSegmentAsync(Segment(Speaker.Interviewer, question), Ct);
+
+        _events.Published.Should().BeEmpty();
+        _store.Answers.Should().BeEmpty();
     }
 
     [Fact]
@@ -198,7 +224,8 @@ public sealed class AutoAnswerServiceTests : IDisposable
         _store.Answers.Should().BeEmpty();
         Types.Should().NotContain(SessionEventTypes.AnswerDone);
         var error = _events.Published.Should().ContainSingle(e => e.Type == SessionEventTypes.Error).Subject;
-        JsonSerializer.Serialize(error.Data).Should().Contain("took too long", "the card must not hang on Thinking…");
+        JsonSerializer.Serialize(error.Data).Should().Contain("total time limit", "the card must not hang on Thinking…");
+        Types.Should().Contain(SessionEventTypes.AnswerDelta, "the received partial text must be preserved");
     }
 
     [Fact]

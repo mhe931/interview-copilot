@@ -45,13 +45,28 @@ internal static class CopilotEndpoints
                 CancellationToken ct) =>
             {
                 await sessions.GetAsync(user.UserId(), sessionId, ct); // ownership check, 404 otherwise
-                await autoAnswers.CancelAsync(sessionId);
+                await autoAnswers.CancelAsync(sessionId, request.Question);
                 var requestId = request.RequestId ?? Guid.NewGuid();
                 var (header, tokens) = await generator.GenerateAsync(
                     new AnswerRequest(sessionId, request.Question, request.Modifier, request.PreviousAnswer, request.PreviousVersion, apiKey, RequestId: requestId),
                     ct);
                 events.Publish(sessionId, SessionEventTypes.AnswerStarted, new { requestId, question = request.Question });
                 return TypedResults.ServerSentEvents(ToEvents(header, tokens, sessionId, requestId, events, ct));
+            })
+            .WithTags("Copilot")
+            .RequireAuthorization(Policies.ExtensionScope);
+
+        app.MapPost("/api/sessions/{sessionId:guid}/answers/{segmentId:guid}/cancel", async (
+                Guid sessionId,
+                Guid segmentId,
+                ClaimsPrincipal user,
+                SessionService sessions,
+                AutoAnswerService autoAnswers,
+                CancellationToken ct) =>
+            {
+                await sessions.GetAsync(user.UserId(), sessionId, ct);
+                await autoAnswers.CancelCurrentAsync(sessionId, segmentId);
+                return TypedResults.NoContent();
             })
             .WithTags("Copilot")
             .RequireAuthorization(Policies.ExtensionScope);
@@ -91,6 +106,13 @@ internal static class CopilotEndpoints
                     completed = true;
                     break;
                 }
+                catch (AnswerStreamTimeoutException ex)
+                {
+                    error = ex.Message;
+                    events.Publish(sessionId, SessionEventTypes.Error, new { requestId, message = error });
+                    completed = true;
+                    break;
+                }
 
                 yield return new SseItem<string>(token, "delta");
             }
@@ -105,7 +127,14 @@ internal static class CopilotEndpoints
             {
                 if (!completed)
                 {
-                    events.Publish(sessionId, SessionEventTypes.Error, new { requestId, message = "The answer was interrupted." });
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        events.Publish(sessionId, SessionEventTypes.AnswerCancelled, new { requestId });
+                    }
+                    else
+                    {
+                        events.Publish(sessionId, SessionEventTypes.Error, new { requestId, message = "The answer was interrupted." });
+                    }
                 }
             }
         }

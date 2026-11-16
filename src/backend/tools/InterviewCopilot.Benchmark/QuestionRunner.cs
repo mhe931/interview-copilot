@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace InterviewCopilot.Benchmark;
 
@@ -12,6 +13,7 @@ internal sealed class QuestionRunner(HttpClient http, IClock clock, TimeSpan tim
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         limit.CancelAfter(timeout);
         var start = clock.GetTimestamp();
+        double? preparedAnswerLookupMs = null;
 
         QuestionResult Fail(string error) => new(number, question.Type, null, null, error);
 
@@ -19,7 +21,7 @@ internal sealed class QuestionRunner(HttpClient http, IClock clock, TimeSpan tim
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/sessions/{sessionId}/answers")
             {
-                Content = JsonContent.Create(new AskRequest(question.Text)),
+                Content = JsonContent.Create(new AskRequest(question.Text, Guid.NewGuid())),
             };
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, limit.Token);
             if (!response.IsSuccessStatusCode)
@@ -33,6 +35,9 @@ internal sealed class QuestionRunner(HttpClient http, IClock clock, TimeSpan tim
             {
                 switch (sse.Name)
                 {
+                    case "meta":
+                        preparedAnswerLookupMs = ReadPreparedAnswerLookupMs(sse.Data);
+                        break;
                     case "delta":
                         ttft ??= clock.GetElapsed(start).TotalMilliseconds;
                         break;
@@ -41,7 +46,7 @@ internal sealed class QuestionRunner(HttpClient http, IClock clock, TimeSpan tim
                     case "done":
                         return ttft is null
                             ? Fail("stream finished with no tokens")
-                            : new QuestionResult(number, question.Type, ttft, clock.GetElapsed(start).TotalMilliseconds, null);
+                            : new QuestionResult(number, question.Type, ttft, clock.GetElapsed(start).TotalMilliseconds, null, preparedAnswerLookupMs);
                 }
             }
 
@@ -63,5 +68,14 @@ internal sealed class QuestionRunner(HttpClient http, IClock clock, TimeSpan tim
         return singleLine.Length <= MaxErrorLength ? singleLine : singleLine[..MaxErrorLength] + "...";
     }
 
-    private sealed record AskRequest(string Question);
+    private static double? ReadPreparedAnswerLookupMs(string data)
+    {
+        using var document = JsonDocument.Parse(data);
+        return document.RootElement.TryGetProperty("preparedAnswerLookupMs", out var value)
+            && value.ValueKind == JsonValueKind.Number
+                ? value.GetDouble()
+                : null;
+    }
+
+    private sealed record AskRequest(string Question, Guid RequestId);
 }

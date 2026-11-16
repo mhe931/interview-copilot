@@ -94,7 +94,7 @@ public class CloudModelCatalogTests
 
     [Theory]
     [MemberData(nameof(Catalogs))]
-    public async Task Should_ThrowKeyRejected_When_ProviderReturns401Or403(string name)
+    public async Task Should_ClassifyUnauthorizedAndForbiddenResponses(string name)
     {
         foreach (var status in new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden })
         {
@@ -102,8 +102,16 @@ public class CloudModelCatalogTests
 
             var act = () => Build(name, Json($"{{\"error\":\"{key}\"}}", status)).ListAsync(key, Ct);
 
-            var thrown = await act.Should().ThrowAsync<LlmKeyRejectedException>();
-            thrown.Which.Message.Should().EndWith("rejected the API key.").And.NotContain(key);
+            if (name == "google" && status == HttpStatusCode.Forbidden)
+            {
+                var thrown = await act.Should().ThrowAsync<LlmUnavailableException>();
+                thrown.Which.Message.Should().Contain("permissions, model access, and billing status").And.NotContain(key);
+            }
+            else
+            {
+                var thrown = await act.Should().ThrowAsync<LlmKeyRejectedException>();
+                thrown.Which.Message.Should().EndWith("rejected the API key.").And.NotContain(key);
+            }
         }
     }
 
@@ -117,7 +125,8 @@ public class CloudModelCatalogTests
         var timeout = () => Build(name, new CloudFakeHandler(_ => throw new TaskCanceledException("t", new TimeoutException()))).ListAsync(NewKey(), Ct);
         var garbage = () => Build(name, Json("not json")).ListAsync(NewKey(), Ct);
 
-        (await limited.Should().ThrowAsync<LlmUnavailableException>()).Which.Message.Should().Contain("rate limiting");
+        var limitedMessage = (await limited.Should().ThrowAsync<LlmUnavailableException>()).Which.Message;
+        limitedMessage.Should().Contain(name == "google" ? "quota or rate limit" : "rate limiting");
         (await broken.Should().ThrowAsync<LlmUnavailableException>()).Which.Message.Should().Contain("(502)");
         (await offline.Should().ThrowAsync<LlmUnavailableException>()).Which.Message.Should().StartWith("Can't reach");
         (await timeout.Should().ThrowAsync<LlmUnavailableException>()).Which.Message.Should().StartWith("Can't reach");

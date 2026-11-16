@@ -2,11 +2,12 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using InterviewCopilot.Application.Providers;
+using Microsoft.Extensions.Logging;
 
 namespace InterviewCopilot.Infrastructure.Llm;
 
 /// <summary>Anthropic Messages API, streamed over SSE (BYOK, opt-in; #30).</summary>
-internal sealed class AnthropicLlmProvider(HttpClient http) : CloudLlmProviderBase(http)
+internal sealed class AnthropicLlmProvider(HttpClient http, ILogger<AnthropicLlmProvider>? logger = null) : CloudLlmProviderBase(http, logger)
 {
     internal const string ApiVersion = "2023-06-01";
     internal const int MaxTokens = 1024;

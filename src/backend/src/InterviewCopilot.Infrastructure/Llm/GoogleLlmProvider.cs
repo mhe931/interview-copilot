@@ -1,12 +1,14 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using InterviewCopilot.Application.Providers;
+using Microsoft.Extensions.Logging;
 
 namespace InterviewCopilot.Infrastructure.Llm;
 
 /// <summary>Google Gemini <c>streamGenerateContent</c> over SSE (BYOK, opt-in; #30).</summary>
-internal sealed class GoogleLlmProvider(HttpClient http) : CloudLlmProviderBase(http)
+internal sealed class GoogleLlmProvider(HttpClient http, ILogger<GoogleLlmProvider>? logger = null) : CloudLlmProviderBase(http, logger)
 {
     internal const string KeyHeader = "x-goog-api-key";
 
@@ -14,8 +16,26 @@ internal sealed class GoogleLlmProvider(HttpClient http) : CloudLlmProviderBase(
 
     protected override string DisplayName => "Google Gemini";
 
+    protected override string ErrorMessage(HttpResponseMessage response) =>
+        CloudProviderErrors.FromGoogleStatus(response);
+
     protected override HttpRequestMessage BuildMessage(LlmRequest request, string apiKey)
     {
+        var generationConfig = new JsonObject();
+        if (request.Model.Equals("gemini-3.5-flash-lite", StringComparison.OrdinalIgnoreCase))
+        {
+            generationConfig["thinkingConfig"] = new JsonObject { ["thinkingLevel"] = "MINIMAL" };
+        }
+        else if (request.Model.Equals("gemini-3.8-flash", StringComparison.OrdinalIgnoreCase))
+        {
+            generationConfig["thinkingConfig"] = new JsonObject { ["thinkingLevel"] = "LOW" };
+        }
+
+        if (!request.Model.StartsWith("gemini-3.", StringComparison.OrdinalIgnoreCase))
+        {
+            generationConfig["temperature"] = request.Temperature;
+        }
+
         var body = new JsonObject
         {
             ["contents"] = new JsonArray([.. request.Messages
@@ -25,7 +45,7 @@ internal sealed class GoogleLlmProvider(HttpClient http) : CloudLlmProviderBase(
                     ["role"] = m.Role == LlmRole.Assistant ? "model" : "user",
                     ["parts"] = new JsonArray(new JsonObject { ["text"] = m.Content }),
                 })]),
-            ["generationConfig"] = new JsonObject { ["temperature"] = request.Temperature },
+            ["generationConfig"] = generationConfig,
         };
 
         var system = string.Join("\n\n", request.Messages.Where(m => m.Role == LlmRole.System).Select(m => m.Content));
@@ -43,7 +63,19 @@ internal sealed class GoogleLlmProvider(HttpClient http) : CloudLlmProviderBase(
     protected override CloudChunk Parse(string data)
     {
         using var document = JsonDocument.Parse(data);
-        if (!document.RootElement.TryGetProperty("candidates", out var candidates)
+        var root = document.RootElement;
+        if (root.TryGetProperty("error", out var error))
+        {
+            int? statusCode = error.ValueKind == JsonValueKind.Object
+                && error.TryGetProperty("code", out var code)
+                && code.ValueKind == JsonValueKind.Number
+                && code.TryGetInt32(out var parsedCode)
+                    ? parsedCode
+                    : null;
+            throw new LlmUnavailableException(CloudProviderErrors.FromGoogleStreamError(statusCode));
+        }
+
+        if (!root.TryGetProperty("candidates", out var candidates)
             || candidates.ValueKind != JsonValueKind.Array
             || candidates.GetArrayLength() == 0
             || !candidates[0].TryGetProperty("content", out var content)
@@ -67,6 +99,11 @@ internal sealed class GoogleModelCatalog(HttpClient http) : CloudModelCatalogBas
     public override string Provider => ProviderNames.Google;
 
     protected override string DisplayName => "Google Gemini";
+
+    protected override Exception ErrorForResponse(HttpResponseMessage response) =>
+        response.StatusCode == HttpStatusCode.Unauthorized
+            ? new LlmKeyRejectedException(CloudProviderErrors.Rejected(DisplayName))
+            : new LlmUnavailableException(CloudProviderErrors.FromGoogleStatus(response));
 
     protected override HttpRequestMessage BuildMessage(string apiKey)
     {

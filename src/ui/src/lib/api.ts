@@ -116,6 +116,10 @@ export class ApiClient {
     return this.json(`/api/sessions/${id}/auto-answer`, { method: 'PUT', body: JSON.stringify({ enabled }) });
   }
 
+  async cancelAutomaticAnswer(id: string, segmentId: string): Promise<void> {
+    await this.send(`/api/sessions/${id}/answers/${segmentId}/cancel`, { method: 'POST' });
+  }
+
   /** WebSocket URL of a session's events channel (same host as the API). The access token is added by the caller. */
   eventsUrl(sessionId: string): string {
     return `${this.baseUrl.replace(/^http/, 'ws')}/ws/sessions/${sessionId}/events`;

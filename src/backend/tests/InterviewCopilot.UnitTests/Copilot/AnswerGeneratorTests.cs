@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentAssertions;
@@ -8,6 +9,7 @@ using InterviewCopilot.Application.Providers;
 using InterviewCopilot.Domain.Entities;
 using InterviewCopilot.Domain.Enums;
 using InterviewCopilot.UnitTests.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace InterviewCopilot.UnitTests.Copilot;
@@ -28,7 +30,13 @@ public class AnswerGeneratorTests
 
     private AnswerGenerator Generator(params ILlmProvider[] llms) =>
         new(_store, _store, _store, new LlmProviderResolver(llms), _keys,
-            Options.Create(new LlmOptions { Model = "llama3.2:3b", Temperature = 0.2 }), new FixedClock(), _events, _preferences, _prepared);
+            Options.Create(new LlmOptions { Model = "llama3.2:3b", Temperature = 0.2 }), new FixedClock(), _events, _preferences,
+            NullLogger<AnswerGenerator>.Instance, _prepared);
+
+    private AnswerGenerator GeneratorWithTimeouts(AnswerTimeoutOptions timeouts, params ILlmProvider[] llms) =>
+        new(_store, _store, _store, new LlmProviderResolver(llms), _keys,
+            Options.Create(new LlmOptions { Model = "llama3.2:3b", Temperature = 0.2 }), new FixedClock(), _events, _preferences,
+            NullLogger<AnswerGenerator>.Instance, _prepared, timeouts);
 
     [Theory]
     [InlineData("qwen2.5:7b", "qwen2.5:7b")]
@@ -177,5 +185,90 @@ public class AnswerGeneratorTests
         var act = () => Generator(new FakeLlm()).GenerateAsync(new AnswerRequest(Guid.NewGuid(), "Q?"), TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<NotFoundException>();
+    }
+
+    [Fact]
+    public async Task Should_Timeout_When_FirstTokenDoesNotArrive()
+    {
+        var generator = GeneratorWithTimeouts(
+            new AnswerTimeoutOptions { FirstToken = TimeSpan.FromMilliseconds(20), IdleStream = TimeSpan.FromSeconds(1), Total = TimeSpan.FromSeconds(1) },
+            new BlockingLlm());
+        var (_, tokens) = await generator.GenerateAsync(
+            new AnswerRequest(_session.Id, "Why this company?"),
+            TestContext.Current.CancellationToken);
+        var act = async () =>
+        {
+            await foreach (var token in tokens)
+            {
+                _ = token;
+            }
+        };
+
+        await act.Should().ThrowAsync<AnswerStreamTimeoutException>()
+            .Where(ex => ex.Phase == AnswerTimeoutPhase.FirstToken);
+    }
+
+    [Fact]
+    public async Task Should_TimeoutIdleStream_AndKeepPartialDeltaWithoutPersisting()
+    {
+        var generator = GeneratorWithTimeouts(
+            new AnswerTimeoutOptions { FirstToken = TimeSpan.FromSeconds(1), IdleStream = TimeSpan.FromMilliseconds(20), Total = TimeSpan.FromSeconds(1) },
+            new BlockingLlm("partial"));
+        var (_, tokens) = await generator.GenerateAsync(
+            new AnswerRequest(_session.Id, "Why this company?"),
+            TestContext.Current.CancellationToken);
+        var received = new List<string>();
+        var act = async () =>
+        {
+            await foreach (var token in tokens)
+            {
+                received.Add(token);
+            }
+        };
+
+        await act.Should().ThrowAsync<AnswerStreamTimeoutException>()
+            .Where(ex => ex.Phase == AnswerTimeoutPhase.IdleStream);
+        received.Should().Equal("partial");
+        _events.Published.Select(e => e.Type).Should().Equal(SessionEventTypes.AnswerDelta);
+        _store.Answers.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Should_EnforceTotalDeadline_When_ItIsShorterThanPhaseDeadlines()
+    {
+        var generator = GeneratorWithTimeouts(
+            new AnswerTimeoutOptions { FirstToken = TimeSpan.FromSeconds(1), IdleStream = TimeSpan.FromSeconds(1), Total = TimeSpan.FromMilliseconds(20) },
+            new BlockingLlm());
+        var (_, tokens) = await generator.GenerateAsync(
+            new AnswerRequest(_session.Id, "Why this company?"),
+            TestContext.Current.CancellationToken);
+        var act = async () =>
+        {
+            await foreach (var token in tokens)
+            {
+                _ = token;
+            }
+        };
+
+        await act.Should().ThrowAsync<AnswerStreamTimeoutException>()
+            .Where(ex => ex.Phase == AnswerTimeoutPhase.Total);
+    }
+
+    private sealed class BlockingLlm(string? firstToken = null) : ILlmProvider
+    {
+        public string Name => ProviderNames.Ollama;
+
+        public async IAsyncEnumerable<string> StreamAsync(
+            LlmRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            if (firstToken is not null)
+            {
+                yield return firstToken;
+            }
+
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            yield break;
+        }
     }
 }

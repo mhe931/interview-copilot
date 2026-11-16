@@ -112,6 +112,59 @@ public sealed class AutoAnswerTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Should_CancelTheMatchingAutomaticAnswer_When_StopIsRequested()
+    {
+        _factory.Stt.Text = "Tell me about a time you led a team.";
+        _factory.Llm.BlockAfterFirstToken = true;
+        var (client, token, session) = await LiveSessionAsync("auto-cancel");
+        using var events = await ConnectAsync("events", session.Id, token);
+        using var audio = await ConnectAsync("audio", session.Id, token);
+
+        try
+        {
+            await SpeakAsync(audio, 0);
+            Guid? segmentId = null;
+            while (true)
+            {
+                var frame = await ReadFrameAsync(events);
+                var type = frame.GetProperty("type").GetString();
+                if (type == "question.detected")
+                {
+                    segmentId = frame.GetProperty("data").GetProperty("segmentId").GetGuid();
+                }
+
+                if (type == "answer.delta")
+                {
+                    break;
+                }
+            }
+
+            var staleResponse = await client.PostAsync(
+                $"/api/sessions/{session.Id}/answers/{Guid.NewGuid()}/cancel",
+                null,
+                Ct);
+            staleResponse.StatusCode.Should().Be(HttpStatusCode.NoContent);
+            _factory.Llm.CancellationObserved.Task.IsCompleted.Should().BeFalse();
+
+            var response = await client.PostAsync(
+                $"/api/sessions/{session.Id}/answers/{segmentId!.Value}/cancel",
+                null,
+                Ct);
+            response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+            await _factory.Llm.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            var cancelled = await ReadFrameAsync(events);
+
+            cancelled.GetProperty("type").GetString().Should().Be("answer.cancelled");
+            cancelled.GetProperty("data").GetProperty("segmentId").GetGuid().Should().Be(segmentId.Value);
+        }
+        finally
+        {
+            _factory.Llm.BlockAfterFirstToken = false;
+            await client.PostAsync($"/api/sessions/{session.Id}/end", null, Ct);
+        }
+    }
+
+    [Fact]
     public async Task Should_BroadcastManualAnswerWithRequestIdentity()
     {
         _factory.Llm.Tokens = ["First", " part"];

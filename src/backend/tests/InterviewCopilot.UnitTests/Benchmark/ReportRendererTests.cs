@@ -13,8 +13,9 @@ public sealed class ReportRendererTests
         var report = new BenchmarkReport(
             new DateTimeOffset(2026, 10, 16, 12, 30, 0, TimeSpan.Zero),
             Hardware,
+            "ollama",
             "llama3.2:3b",
-            [new QuestionResult(1, "Behavioral", 1200.4, 6000.6, null), new QuestionResult(2, "Coding", 2000, 7000, null)]);
+            [new QuestionResult(1, "Behavioral", 1200.4, 6000.6, null, 2.4), new QuestionResult(2, "Coding", 2000, 7000, null, 4.2)]);
 
         var markdown = ReportRenderer.Render(report);
 
@@ -23,7 +24,9 @@ public sealed class ReportRendererTests
         markdown.Should().Contain("Logical cores: 8");
         markdown.Should().Contain("16.0 GiB");
         markdown.Should().Contain("Test OS 1.0");
+        markdown.Should().Contain("Provider: ollama");
         markdown.Should().Contain("llama3.2:3b");
+        markdown.Should().Contain("Prepared-answer lookup");
         markdown.Should().Contain("NFR-05");
         markdown.Should().Contain("**PASS**");
     }
@@ -34,13 +37,15 @@ public sealed class ReportRendererTests
         var report = new BenchmarkReport(
             DateTimeOffset.UnixEpoch,
             Hardware,
+            "google",
             "m",
-            [new QuestionResult(1, "Behavioral", 1200.4, 6000.6, null), new QuestionResult(2, "Coding", null, null, "timed out after 60 s")]);
+            [new QuestionResult(1, "Behavioral", 1200.4, 6000.6, null, 5.5), new QuestionResult(2, "Coding", null, null, "timed out after 60 s")]);
 
         var markdown = ReportRenderer.Render(report);
 
-        markdown.Should().Contain("| 1 | Behavioral | 1200 | 6001 | ok |");
-        markdown.Should().Contain("| 2 | Coding | - | - | failed: timed out after 60 s |");
+        markdown.Should().Contain("| 1 | Behavioral | 6 | 1200 | 6001 | ok |");
+        markdown.Should().Contain("| 2 | Coding | - | - | - | failed: timed out after 60 s |");
+        markdown.Should().Contain("| Prepared-answer lookup | 6 | 6 |");
         markdown.Should().Contain("1 of 2");
     }
 
@@ -50,6 +55,7 @@ public sealed class ReportRendererTests
         var report = new BenchmarkReport(
             DateTimeOffset.UnixEpoch,
             Hardware,
+            "ollama",
             "m",
             [new QuestionResult(1, "Coding", 5001, 9000, null)]);
 
@@ -62,6 +68,7 @@ public sealed class ReportRendererTests
         var report = new BenchmarkReport(
             DateTimeOffset.UnixEpoch,
             Hardware,
+            "ollama",
             "m",
             [new QuestionResult(1, "Coding", null, null, "boom")]);
 
@@ -77,6 +84,7 @@ public sealed class ReportRendererTests
         var report = new BenchmarkReport(
             DateTimeOffset.UnixEpoch,
             Hardware,
+            "ollama",
             "m",
             [new QuestionResult(1, "Coding", null, null, "a|b\nc")]);
 
@@ -95,6 +103,7 @@ public sealed class ReportRendererTests
             var report = new BenchmarkReport(
                 DateTimeOffset.UnixEpoch,
                 new HardwareInfo("cpu", 4, 8L * 1024 * 1024 * 1024 + 512L * 1024 * 1024, "os"),
+                "ollama",
                 "m",
                 [new QuestionResult(1, "Coding", 1500, 2500, null)]);
 

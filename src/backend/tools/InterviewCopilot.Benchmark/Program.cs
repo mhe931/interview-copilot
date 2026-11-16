@@ -22,6 +22,18 @@ internal static class Program
             return 2;
         }
 
+        var apiKey = options.ApiKeyEnvironmentVariable is null
+            ? null
+            : Environment.GetEnvironmentVariable(options.ApiKeyEnvironmentVariable);
+        if (options.Provider != BenchmarkOptions.DefaultProvider && string.IsNullOrWhiteSpace(apiKey))
+        {
+            var detail = options.ApiKeyEnvironmentVariable is null
+                ? "Pass --api-key-env with the name of an environment variable containing the key."
+                : $"The environment variable '{options.ApiKeyEnvironmentVariable}' is not set.";
+            await Console.Error.WriteLineAsync($"A key is required for provider '{options.Provider}'. {detail}");
+            return 2;
+        }
+
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>
         {
@@ -34,11 +46,18 @@ internal static class Program
         var runner = new BenchmarkRunner(http, new StopwatchClock(), TimeProvider.System, QuestionTimeout, PasswordGenerator.Generate);
         var hardware = HardwareProbe.Detect();
 
-        Console.WriteLine($"Benchmarking {questions.Count} questions against {options.BaseUrl} (model label: {options.Model})");
+        Console.WriteLine($"Benchmarking {questions.Count} questions against {options.BaseUrl} (provider: {options.Provider}, model: {options.Model})");
         BenchmarkReport report;
         try
         {
-            report = await runner.RunAsync(questions, options.Model, hardware, new Progress<QuestionResult>(PrintProgress), cts.Token);
+            report = await runner.RunAsync(
+                questions,
+                options.Provider,
+                options.Model,
+                apiKey,
+                hardware,
+                new Progress<QuestionResult>(PrintProgress),
+                cts.Token);
         }
         catch (BenchmarkSetupException ex)
         {

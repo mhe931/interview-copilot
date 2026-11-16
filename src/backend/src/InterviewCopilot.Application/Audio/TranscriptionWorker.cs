@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using InterviewCopilot.Application.Common.Interfaces;
 using InterviewCopilot.Application.Events;
@@ -71,6 +72,9 @@ public sealed partial class TranscriptionWorker : BackgroundService
     [LoggerMessage(Level = LogLevel.Warning, Message = "Transcription failed for session {SessionId} ({ErrorType}).")]
     private partial void LogTranscriptionFailed(Guid sessionId, string errorType);
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "Transcription for session {SessionId} speaker {Speaker} completed in {ElapsedMs} ms.")]
+    private partial void LogTranscriptionCompleted(Guid sessionId, Speaker speaker, double elapsedMs);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "A transcript listener failed for session {SessionId} ({ErrorType}).")]
     private partial void LogListenerFailed(Guid sessionId, string errorType);
 
@@ -131,12 +135,14 @@ public sealed partial class TranscriptionWorker : BackgroundService
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "One bad segment must not stop the session's transcription; it is reported as an error event.")]
     private async Task TranscribeAsync(Guid sessionId, Speaker speaker, SpeechSegment speech, CancellationToken cancellationToken)
     {
+        var startedAt = Stopwatch.GetTimestamp();
         try
         {
             using var scope = _scopes.CreateScope();
             var provider = scope.ServiceProvider.GetRequiredService<ISpeechToTextProvider>();
             var chunk = new AudioChunk(speaker, speech.Pcm16, AudioFrameParser.SampleRate, speech.StartMs);
             var result = await provider.TranscribeAsync(chunk, null, cancellationToken);
+            LogTranscriptionCompleted(sessionId, speaker, Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
             if (string.IsNullOrWhiteSpace(result.Text))
             {
                 return;

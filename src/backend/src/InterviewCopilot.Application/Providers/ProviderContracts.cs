@@ -18,7 +18,8 @@ public sealed record LlmRequest(
     string Model,
     IReadOnlyList<LlmMessage> Messages,
     double Temperature,
-    string? ApiKey = null);
+    string? ApiKey = null,
+    Guid? RequestId = null);
 
 /// <summary>A chat model that streams its reply token by token.</summary>
 public interface ILlmProvider

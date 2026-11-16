@@ -174,6 +174,23 @@ public class CloudLlmProviderTests
     }
 
     [Fact]
+    public async Task Should_ReportGeminiQuotaError_When_ErrorArrivesInsideStream()
+    {
+        var key = NewKey();
+        const string errorMessage = "private provider detail";
+        var handler = new CloudFakeHandler(
+            HttpStatusCode.OK,
+            $"data: {{\"error\":{{\"code\":429,\"message\":\"{errorMessage}\",\"status\":\"RESOURCE_EXHAUSTED\"}}}}\n\n");
+
+        var act = () => CollectAsync(Google(handler), Request(key));
+
+        var thrown = await act.Should().ThrowAsync<LlmUnavailableException>();
+        thrown.Which.Message.Should().Contain("quota");
+        thrown.Which.Message.Should().NotContain(errorMessage);
+        thrown.Which.Message.Should().NotContain(key);
+    }
+
+    [Fact]
     public async Task Should_OmitSystemInstruction_When_NoSystemMessage()
     {
         var handler = new CloudFakeHandler(HttpStatusCode.OK, GoogleSse);
@@ -182,6 +199,32 @@ public class CloudLlmProviderTests
 
         using var body = JsonDocument.Parse(handler.LastBody!);
         body.RootElement.TryGetProperty("systemInstruction", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Should_UseMinimalThinking_AndOmitTemperature_ForGemini35FlashLite()
+    {
+        var handler = new CloudFakeHandler(HttpStatusCode.OK, GoogleSse);
+
+        await CollectAsync(Google(handler), Request(NewKey(), "gemini-3.5-flash-lite"));
+
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        var config = body.RootElement.GetProperty("generationConfig");
+        config.GetProperty("thinkingConfig").GetProperty("thinkingLevel").GetString().Should().Be("MINIMAL");
+        config.TryGetProperty("temperature", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Should_UseLowThinking_AndOmitTemperature_ForGemini38Flash()
+    {
+        var handler = new CloudFakeHandler(HttpStatusCode.OK, GoogleSse);
+
+        await CollectAsync(Google(handler), Request(NewKey(), "gemini-3.8-flash"));
+
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        var config = body.RootElement.GetProperty("generationConfig");
+        config.GetProperty("thinkingConfig").GetProperty("thinkingLevel").GetString().Should().Be("LOW");
+        config.TryGetProperty("temperature", out _).Should().BeFalse();
     }
 
     // ---- Shared behaviour ----
@@ -228,7 +271,9 @@ public class CloudLlmProviderTests
             var act = () => CollectAsync(Build(name, handler), Request(key));
 
             var thrown = await act.Should().ThrowAsync<LlmUnavailableException>();
-            thrown.Which.Message.Should().Be($"{Display(name)} rejected the API key.");
+            thrown.Which.Message.Should().Be(name == "google" && status == HttpStatusCode.Forbidden
+                ? "Google Gemini denied the request. Check the API key's permissions, model access, and billing status."
+                : $"{Display(name)} rejected the API key.");
             thrown.Which.Message.Should().NotContain(key);
         }
     }
@@ -241,8 +286,10 @@ public class CloudLlmProviderTests
 
         var act = () => CollectAsync(Build(name, handler), Request(NewKey()));
 
-        await act.Should().ThrowAsync<LlmUnavailableException>()
-            .WithMessage($"{Display(name)} is rate limiting requests. Try again shortly.");
+        var thrown = await act.Should().ThrowAsync<LlmUnavailableException>();
+        thrown.Which.Message.Should().Be(name == "google"
+            ? "Google Gemini quota or rate limit reached. Check the key's quota before retrying."
+            : $"{Display(name)} is rate limiting requests. Try again shortly.");
     }
 
     [Theory]
@@ -253,7 +300,10 @@ public class CloudLlmProviderTests
 
         var act = () => CollectAsync(Build(name, handler), Request(NewKey()));
 
-        await act.Should().ThrowAsync<LlmUnavailableException>().WithMessage($"{Display(name)} returned an error (500)*");
+        var thrown = await act.Should().ThrowAsync<LlmUnavailableException>();
+        thrown.Which.Message.Should().Be(name == "google"
+            ? "Google Gemini returned an error (500). Check the model and provider status."
+            : $"{Display(name)} returned an error (500). Try again shortly.");
     }
 
     [Theory]
